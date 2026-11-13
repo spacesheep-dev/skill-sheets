@@ -1,0 +1,23 @@
+# Checks the skill on every pull request, and on every push to main: the same format
+# check Spacesheep runs when it takes a release. A folder that fails can't become a version.
+name: Check the skill
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - run: npx -y spacesheep@latest skills lint
