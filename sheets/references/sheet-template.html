@@ -234,7 +234,10 @@ var SheetEngine = (function () {
     if (typeof v === "string") { var s = v.trim(); if (/%$/.test(s) && !isNaN(parseFloat(s))) return parseFloat(s) / 100; var m = ISO.exec(s); if (m) return serial(+m[1], +m[2], +m[3]); var n = Number(s.replace(/,/g, "")); return isNaN(n) || s === "" ? ERR("#VALUE!") : n; }
     return ERR("#VALUE!");
   }
-  function text(s) { return s.length > LIMIT.text ? ERR("#VALUE!") : s; } // Excel's longest cell text
+  // Text a formula makes: at most Excel's 32,767 characters, and it costs a step for every 4 characters, so long
+  // text costs what it weighs. low() is the lower-case copy a comparison makes, charged the same way.
+  function text(s) { if (s.length > LIMIT.text) return ERR("#VALUE!"); charge(s.length >> 2); return s; }
+  function low(v) { var s = str(v).toLowerCase(); charge(s.length >> 2); return s; }
   function str(v) { if (v === null || v === undefined) return ""; if (typeof v === "boolean") return v ? "TRUE" : "FALSE"; if (typeof v === "number") return String(Math.round(v * 1e10) / 1e10); return String(v); }
   function bool(v) { if (isErr(v)) return v; if (typeof v === "string") { var u = v.toUpperCase(); if (u === "TRUE") return true; if (u === "FALSE") return false; return ERR("#VALUE!"); } return !!num(v); }
   function flat(args) { room(args.reduce(function (n, a) { return n + cells(a); }, 0)); var out = []; args.forEach(function (a) { if (isRange(a)) a.rows.forEach(function (r) { r.forEach(function (c) { out.push({ v: c, fromRange: true }); }); }); else out.push({ v: a, fromRange: false }); }); return out; }
@@ -254,7 +257,7 @@ var SheetEngine = (function () {
       if (typeof rhs === "boolean") return op === "<>" ? v !== rhs : v === rhs;
       if (rn !== null && typeof v === "number") { switch (op) { case "=": return v === rn; case "<>": return v !== rn; case "<": return v < rn; case ">": return v > rn; case "<=": return v <= rn; case ">=": return v >= rn; } }
       if (rn !== null && op !== "=" && op !== "<>") return false;
-      var vs = str(v).toLowerCase();
+      var vs = low(v);
       if (op === "=") return rhs === "" ? (v === null || v === "") : (wild ? wild.test(vs) : vs === rs);
       if (op === "<>") return rhs === "" ? !(v === null || v === "") : (wild ? !wild.test(vs) : vs !== rs);
       return op === "<" ? vs < rs : op === ">" ? vs > rs : op === "<=" ? vs <= rs : vs >= rs;
@@ -287,7 +290,7 @@ var SheetEngine = (function () {
   }
   function most(n) { var m = n.length ? -Infinity : 0; for (var i = 0; i < n.length; i++) if (n[i] > m) m = n[i]; return m; }
   function least(n) { var m = n.length ? Infinity : 0; for (var i = 0; i < n.length; i++) if (n[i] < m) m = n[i]; return m; }
-  function lookupEq(a, b) { if (typeof a === "number" && typeof b === "number") return a === b; return str(a).toLowerCase() === str(b).toLowerCase(); }
+  function lookupEq(a, b) { if (typeof a === "number" && typeof b === "number") return a === b; return low(a) === low(b); }
   function round(x, d, mode) { var f = Math.pow(10, d); var y = x * f; y = mode === "up" ? (y < 0 ? -Math.ceil(-y - 1e-9) : Math.ceil(y - 1e-9)) : mode === "down" ? (y < 0 ? -Math.floor(-y + 1e-9) : Math.floor(y + 1e-9)) : (y < 0 ? -Math.round(-y + 1e-9) : Math.round(y + 1e-9)); return y / f; }
   function addMonths(s, n) { var d = fromSerial(s), m = d.m - 1 + n, y = d.y + Math.floor(m / 12); m = ((m % 12) + 12) % 12; var last = new Date(Date.UTC(y, m + 1, 0)).getUTCDate(); return serial(y, m + 1, Math.min(d.d, last)); }
 
@@ -328,14 +331,14 @@ var SheetEngine = (function () {
     TODAY: function () { var n = new Date(); return serial(n.getFullYear(), n.getMonth() + 1, n.getDate()); },
     EDATE: function (a) { var x = num(a[0]), n = num(a[1]); return isErr(x) ? x : isErr(n) ? n : addMonths(x, Math.trunc(n)); },
     EOMONTH: function (a) { var x = num(a[0]), n = num(a[1]); if (isErr(x)) return x; if (isErr(n)) return n; var d = fromSerial(addMonths(x, Math.trunc(n))); return serial(d.y, d.m + 1, 0); },
-    CONCAT: function (a) { var fl = flat(a), s = ""; for (var i = 0; i < fl.length; i++) { if (isErr(fl[i].v)) return fl[i].v; s += str(fl[i].v); if (s.length > LIMIT.text) return ERR("#VALUE!"); } return s; },
+    CONCAT: function (a) { var fl = flat(a), s = ""; for (var i = 0; i < fl.length; i++) { if (isErr(fl[i].v)) return fl[i].v; s += str(fl[i].v); if (s.length > LIMIT.text) return ERR("#VALUE!"); } return text(s); },
     LEN: function (a) { return isErr(a[0]) ? a[0] : str(a[0]).length; },
-    UPPER: function (a) { return isErr(a[0]) ? a[0] : str(a[0]).toUpperCase(); },
-    LOWER: function (a) { return isErr(a[0]) ? a[0] : str(a[0]).toLowerCase(); },
-    TRIM: function (a) { return isErr(a[0]) ? a[0] : str(a[0]).trim().replace(/\s+/g, " "); },
-    LEFT: function (a) { var n = a.length > 1 ? num(a[1]) : 1; return isErr(a[0]) ? a[0] : isErr(n) ? n : str(a[0]).slice(0, n); },
-    RIGHT: function (a) { var n = a.length > 1 ? num(a[1]) : 1, s = str(a[0]); return isErr(a[0]) ? a[0] : isErr(n) ? n : n <= 0 ? "" : s.slice(-n); },
-    MID: function (a) { var s = num(a[1]), n = num(a[2]); return isErr(a[0]) ? a[0] : isErr(s) ? s : isErr(n) ? n : str(a[0]).substr(s - 1, n); },
+    UPPER: function (a) { return isErr(a[0]) ? a[0] : text(str(a[0]).toUpperCase()); },
+    LOWER: function (a) { return isErr(a[0]) ? a[0] : text(str(a[0]).toLowerCase()); },
+    TRIM: function (a) { return isErr(a[0]) ? a[0] : text(str(a[0]).trim().replace(/\s+/g, " ")); },
+    LEFT: function (a) { var n = a.length > 1 ? num(a[1]) : 1; return isErr(a[0]) ? a[0] : isErr(n) ? n : text(str(a[0]).slice(0, n)); },
+    RIGHT: function (a) { var n = a.length > 1 ? num(a[1]) : 1, s = str(a[0]); return isErr(a[0]) ? a[0] : isErr(n) ? n : n <= 0 ? "" : text(s.slice(-n)); },
+    MID: function (a) { var s = num(a[1]), n = num(a[2]); return isErr(a[0]) ? a[0] : isErr(s) ? s : isErr(n) ? n : text(str(a[0]).substr(s - 1, n)); },
     ISBLANK: function (a) { return a[0] === null || a[0] === ""; },
     ISNUMBER: function (a) { return typeof a[0] === "number"; },
     ISTEXT: function (a) { return typeof a[0] === "string"; },
@@ -498,6 +501,10 @@ var SheetEngine = (function () {
   }
   // How much of a tab the page draws: its data, a few empty rows and a column past it, at most LIMIT.cells cells.
   // cut is how many rows that leaves out (0 for any sheet the skill builds).
+  // The rows a tab's downloads hold, the same in CSV and .xlsx as on screen: all of them, unless the tab is over
+  // LIMIT.cells; then the first that fit, with how many were left out said in the file's last line.
+  function kept(book, tab) { var sz = book.size(tab.name), rows = Math.min(sz.rows, drawSize(book, tab).rows); return { rows: rows, out: sz.rows - rows }; }
+  function leftOut(n) { return n + " more row" + (n === 1 ? " isn't" : "s aren't") + " in this file: the tab is over " + LIMIT.cells + " cells, so only the first rows fit"; }
   function drawSize(book, tab) {
     var sz = book.size(tab.name), cols = Math.min(LIMIT.cols, Math.max(sz.cols + 1, (tab.cols || []).length, 4)), rows = Math.min(LIMIT.rows, Math.max(sz.rows + 3, 12));
     var fit = Math.max(1, Math.floor(LIMIT.cells / cols));
@@ -577,8 +584,8 @@ var SheetEngine = (function () {
     var dxfs = [], dxfKey = map();
     function dxfFor(style) { if (!(style in dxfKey)) { dxfKey[style] = dxfs.length; dxfs.push(style); } return dxfKey[style]; }
     var sheets = book.order.map(function (name) {
-      var tab = book.tabs[name.toLowerCase()], raw = book.raw[name.toLowerCase()], rows = {};
-      Object.keys(raw).forEach(function (a) { var p = parseAddr(a); if (p) (rows[p.r] = rows[p.r] || []).push({ a: a, c: p.c }); });
+      var tab = book.tabs[name.toLowerCase()], raw = book.raw[name.toLowerCase()], rows = map(), k = kept(book, tab);
+      Object.keys(raw).forEach(function (a) { var p = parseAddr(a); if (p && p.r <= k.rows) (rows[p.r] = rows[p.r] || []).push({ a: a, c: p.c }); });
       var freeze = tab.freeze || 0, out = [];
       Object.keys(rows).map(Number).sort(function (p, q) { return p - q; }).forEach(function (r) {
         var cells = rows[r].sort(function (p, q) { return p.c - q.c; }).map(function (it) {
@@ -599,6 +606,7 @@ var SheetEngine = (function () {
         }).join("");
         out.push('<row r="' + r + '">' + cells + "</row>");
       });
+      if (k.out) out.push('<row r="' + (k.rows + 1) + '"><c r="A' + (k.rows + 1) + '" t="inlineStr"><is><t>' + x(leftOut(k.out)) + "</t></is></c></row>");
       var cols = (tab.cols || []).map(function (c, i) { return c && c.w ? '<col min="' + (i + 1) + '" max="' + (i + 1) + '" width="' + Math.max(6, Math.round(c.w / 7)) + '" customWidth="1"/>' : ""; }).join("");
       var view = freeze ? '<sheetViews><sheetView workbookViewId="0"><pane ySplit="' + freeze + '" topLeftCell="A' + (freeze + 1) + '" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>' : "";
       var cf = (tab.rules || []).filter(function (rule) { return book.live(String(rule.if).replace(/^=/, "")); }).map(function (rule, i) { return '<conditionalFormatting sqref="' + x(String(rule.range).replace(/\$/g, "")) + '"><cfRule type="expression" dxfId="' + dxfFor(rule.style || "bad") + '" priority="' + (i + 1) + '"><formula>' + x(xlFormula(String(rule.if).replace(/^=/, ""))) + "</formula></cfRule></conditionalFormatting>"; }).join("");
@@ -621,8 +629,7 @@ var SheetEngine = (function () {
     return zip(files);
   }
   function csv(book, tabName) {
-    var sz = book.size(tabName), tab = book.tabs[String(tabName).toLowerCase()], lines = [];
-    var rows = Math.min(sz.rows, drawSize(book, tab).rows); // the rows the page draws, at most
+    var sz = book.size(tabName), tab = book.tabs[String(tabName).toLowerCase()], lines = [], k = kept(book, tab), rows = k.rows;
     for (var r = 1; r <= rows; r++) {
       var row = [];
       for (var c = 1; c <= sz.cols; c++) {
@@ -633,6 +640,7 @@ var SheetEngine = (function () {
       }
       lines.push(row.join(","));
     }
+    if (k.out) lines.push(leftOut(k.out));
     return lines.join("\r\n") + "\r\n";
   }
   // Every error cell in the book, for the status line and the agent's own check.
@@ -688,9 +696,60 @@ var SheetEngine = (function () {
     });
     return all;
   }
-  return { Book: Book, parse: parse, fmtValue: fmtValue, cellFmt: cellFmt, xlsx: xlsx, csv: csv, report: report, expand: expand, parseAddr: parseAddr, addr: addr, colName: colName, isErr: isErr, serial: serial, NAMES: NAMES, applyDelta: applyDelta, BATCH: BATCH, LIMIT: LIMIT, isCell: isCell, drawSize: drawSize, cleanEdits: cleanEdits, mergeEdits: mergeEdits, map: map };
+  // Each highlight rule's cells on a tab: {B4: "bad"}, the first rule that matches a cell winning.
+  function ruleHits(book, tab) {
+    var hits = map();
+    (tab.rules || []).forEach(function (rule) { var cells = expand(rule.range); if (!cells.length) return; var top = cells[0]; cells.forEach(function (q) { var a = addr(q.r, q.c); if (!hits[a] && book.ruleAt(rule.if, tab.name, q.r - top.r, q.c - top.c)) hits[a] = rule.style || "bad"; }); });
+    return hits;
+  }
+  // "What changed in this version": every formula cell whose value differs from the same sheet with data.before's
+  // old inputs, with its label and both values as the page shows them.
+  function delta(data, overlay, book) {
+    var before = data.before || {}, keys = Object.keys(before), out = [];
+    if (!keys.length) return out;
+    var old = JSON.parse(JSON.stringify(data));
+    keys.forEach(function (k) { var bang = k.lastIndexOf("!"), tn = k.slice(0, bang).toLowerCase(), a = k.slice(bang + 1).toUpperCase(); if (!isCell(a)) return; old.tabs.forEach(function (t) { if (t.name.toLowerCase() !== tn) return; t.cells = t.cells || {}; if (before[k] === null) delete t.cells[a]; else t.cells[a] = before[k]; }); });
+    var ob = new Book(old, overlay);
+    data.tabs.forEach(function (t) {
+      var raw = book.raw[t.name.toLowerCase()], oraw = ob.raw[t.name.toLowerCase()];
+      Object.keys(raw).forEach(function (a) {
+        var inp = book.input(t.name, a); if (!inp || inp.formula === undefined || !oraw || !oraw[a]) return;
+        var nv = book.value(t.name, a), ov = ob.value(t.name, a);
+        if (JSON.stringify(nv) === JSON.stringify(ov)) return;
+        var p = parseAddr(a), head = book.value(t.name, addr(1, p.c)), rowName = book.value(t.name, addr(p.r, 1)), fmt = cellFmt(t, a, raw[a], inp);
+        out.push({ cell: t.name + "!" + a, label: [rowName, head].filter(function (v) { return typeof v === "string" && v; }).join(" · "), was: fmtValue(ov, fmt, data), now: fmtValue(nv, fmt, data) });
+      });
+    });
+    return out;
+  }
+  // Everything the page shows that takes working out, in one call, so it can run off the page's thread: the value of
+  // every formula cell ("tab!A1", tab lowercased), each tab's highlighted cells, and what changed in this version.
+  // part(values) gets what's done every 50 ms, so a calculation stopped for taking too long keeps what it finished.
+  function calc(data, overlay, part) {
+    var book = new Book(data, overlay), values = map(), fresh = map(), t = Date.now(), rules = map();
+    book.order.forEach(function (n) {
+      Object.keys(book.raw[n.toLowerCase()]).forEach(function (a) {
+        var inp = book.input(n, a); if (!inp || inp.formula === undefined) return;
+        values[n.toLowerCase() + "!" + a] = fresh[n.toLowerCase() + "!" + a] = book.value(n, a);
+        if (part && Date.now() - t > 50) { part(fresh); fresh = map(); t = Date.now(); }
+      });
+    });
+    book.order.forEach(function (n) { rules[n.toLowerCase()] = ruleHits(book, book.tabs[n.toLowerCase()]); });
+    return { values: values, rules: rules, delta: delta(data, overlay, book) };
+  }
+  return { Book: Book, parse: parse, fmtValue: fmtValue, cellFmt: cellFmt, xlsx: xlsx, csv: csv, report: report, expand: expand, parseAddr: parseAddr, addr: addr, colName: colName, isErr: isErr, serial: serial, NAMES: NAMES, applyDelta: applyDelta, BATCH: BATCH, LIMIT: LIMIT, isCell: isCell, drawSize: drawSize, kept: kept, cleanEdits: cleanEdits, mergeEdits: mergeEdits, map: map, calc: calc, ruleHits: ruleHits };
 })();
 if (typeof module !== "undefined") module.exports = SheetEngine;
+</script>
+
+<!-- The engine's worker: the engine plus these lines work out the sheet off the page's thread. Do not edit. -->
+<script type="text/plain" id="sheet-worker">
+self.onmessage = function (e) {
+  var m = e.data || {};
+  SheetEngine.LIMIT.steps = 10000000; // off the page's thread a 5,000-row sheet fits; the page's 2 s limit is the backstop
+  try { self.postMessage({ id: m.id, done: SheetEngine.calc(m.data, m.overlay, function (part) { self.postMessage({ id: m.id, part: part }); }) }); }
+  catch (err) { self.postMessage({ id: m.id, failed: String(err && err.message || err) }); }
+};
 </script>
 
 <!-- The grid, shared edits, charts and downloads. Do not edit. -->
@@ -700,8 +759,8 @@ if (typeof module !== "undefined") module.exports = SheetEngine;
   if (typeof document === "undefined") return;
   var E = SheetEngine, data;
   try { data = JSON.parse(document.getElementById("sheet-data").textContent); } catch (e) { document.getElementById("status").textContent = "The sheet's data isn't valid JSON: " + e.message; document.getElementById("status").className = "status err"; return; }
-  var m = location.pathname.match(/^\/s\/[^/]+/), API = (m ? m[0] : "") + "/api", COL = "cells";
-  var state = { tab: 0, sel: "A1", showF: false, loaded: false, signedIn: false, me: null, mine: E.map(), others: [], since: null, poll: 15000 };
+  var m = location.pathname.match(/^\/s\/[^/]+/), BASE = m ? m[0] : "", API = BASE + "/api", COL = "cells";
+  var state = { ver: 0, tab: 0, sel: "A1", showF: false, loaded: false, signedIn: false, me: null, mine: E.map(), others: [], since: null, poll: 15000 };
   var savedAt = Date.parse(data.saved_at || 0) || 0;
   // A cell the agent changed at time T keeps the agent's value over any person's edit made before T.
   var stamps = E.map();
@@ -714,7 +773,67 @@ if (typeof module !== "undefined") module.exports = SheetEngine;
   function stampOf(tab, a) { return Math.max(stamps[tab + "!" + a] || 0, stamps[tab + "!*"] || 0); }
   function overlay() { return E.mergeEdits(state.others.concat(state.me ? [{ data: { edits: state.mine }, mine: true }] : []), data.tabs, stampOf); }
   var book;
-  function rebuild() { book = new E.Book(data, overlay()); }
+  // --- working out the sheet: in a worker with a time limit, so a sheet that takes too long ends in #CALC! cells
+  // instead of a frozen tab. The grid draws at once from what's known: a formula cell keeps its last value until the
+  // new one arrives, and shows … only before it has ever had one. state.ver goes up whenever the cells or edits change.
+  var PENDING = { pending: true }, LIMIT_MS = 2000;
+  var calc = { vals: E.map(), rules: E.map(), delta: [], job: 0, ver: -1, w: null, tries: 0, timer: null, got: E.map(), busy: false, late: false, then: [], msg: null };
+  var SOURCES = [ // the page's own engine as a blob; else the copy sheet.js saves beside the page, for pages whose rules refuse blobs
+    function () { return new Worker(URL.createObjectURL(new Blob([document.getElementById("sheet-engine").textContent + "\n" + document.getElementById("sheet-worker").textContent], { type: "text/javascript" }))); },
+    function () { return new Worker(BASE + "/sheet-worker.js"); }];
+  function worker() {
+    while (!calc.w && calc.tries < SOURCES.length) {
+      var w; try { w = SOURCES[calc.tries](); } catch (e) { calc.tries++; continue; }
+      w.onmessage = answer;
+      w.onerror = function (ev) { if (ev.preventDefault) ev.preventDefault(); if (calc.w !== this) return; var ok = this.ok; stop(); if (!ok) calc.tries++; if (calc.busy) send(); };
+      calc.w = w;
+    }
+    return calc.w;
+  }
+  function stop() { clearTimeout(calc.timer); if (calc.w) { calc.w.terminate(); calc.w = null; } }
+  function recalc() { // a job for the cells and edits as they are now; the newest job wins
+    if (calc.busy) stop();
+    calc.job++; calc.got = E.map(); calc.busy = true; calc.late = false;
+    calc.msg = { id: calc.job, data: data, overlay: overlay() };
+    send();
+  }
+  function send() {
+    var w = worker();
+    if (!w) { calc.here = true; var r = E.calc(calc.msg.data, calc.msg.overlay); merge(r.values); done(r); draw(); return; } // no worker: here, within the page's small budget, and the status says so
+    w.postMessage(calc.msg);
+    clearTimeout(calc.timer);
+    calc.timer = setTimeout(function () { // too long: stop it, and what it hadn't finished shows #CALC!
+      stop(); calc.late = true;
+      formulas(function (key) { if (!calc.got[key]) calc.vals[key] = { e: "#CALC!" }; });
+      done(null); draw();
+    }, LIMIT_MS);
+  }
+  function answer(e) {
+    var r = e.data || {}; this.ok = true;
+    if (r.id !== calc.job) return; // an older job's
+    if (r.part) { merge(r.part); draw(); }
+    if (r.done) { clearTimeout(calc.timer); merge(r.done.values); done(r.done); draw(); }
+    if (r.failed) { stop(); calc.tries = SOURCES.length; send(); draw(); }
+  }
+  function merge(vals) { Object.keys(vals).forEach(function (k) { calc.vals[k] = vals[k]; calc.got[k] = true; }); }
+  function done(r) { // a download waiting for the values gets a book built from them
+    if (r) { calc.rules = E.map(r.rules); calc.delta = r.delta; }
+    calc.busy = false; var then = calc.then; calc.then = [];
+    if (then.length) { rebuild(); then.forEach(function (f) { f(); }); }
+  }
+  function whenDone(f) { if (calc.busy) calc.then.push(f); else f(); }
+  var drawing = false;
+  function draw() { // again with the new values, keeping what someone is typing in the formula bar
+    if (drawing) return; drawing = true;
+    requestAnimationFrame(function () { drawing = false; var fx = document.getElementById("fx"), typing = document.activeElement === fx ? fx.value : null, keep = state.sel; render(); select(keep); if (typing !== null) fx.value = typing; });
+  }
+  function formulas(f) { book.order.forEach(function (n) { Object.keys(book.raw[n.toLowerCase()]).forEach(function (a) { var inp = book.input(n, a); if (inp && inp.formula !== undefined) f(n.toLowerCase() + "!" + a); }); }); }
+  function rebuild() {
+    book = new E.Book(data, overlay());
+    if (calc.ver !== state.ver) { calc.ver = state.ver; recalc(); }
+    formulas(function (key) { book.memo[key] = key in calc.vals ? calc.vals[key] : PENDING; }); // the page itself works nothing out
+  }
+  function shown(v, fmt) { return v === PENDING ? "…" : E.fmtValue(v, fmt, data); }
   function tabObj() { return data.tabs[state.tab]; }
   function el(tag, attrs, text) { var n = document.createElement(tag); if (attrs) Object.keys(attrs).forEach(function (k) { n.setAttribute(k, attrs[k]); }); if (text !== undefined) n.textContent = text; return n; }
   function slug(s) { return String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "tab"; }
@@ -723,7 +842,7 @@ if (typeof module !== "undefined") module.exports = SheetEngine;
     var L = { list: E.map(), check: E.map(), rule: E.map() };
     (tab.lists || []).forEach(function (l) { E.expand(l.range).forEach(function (q) { L.list[E.addr(q.r, q.c)] = l; }); });
     (tab.checks || []).forEach(function (rg) { E.expand(rg).forEach(function (q) { L.check[E.addr(q.r, q.c)] = true; }); });
-    (tab.rules || []).forEach(function (rule) { var cells = E.expand(rule.range); if (!cells.length) return; var top = cells[0]; cells.forEach(function (q) { var a = E.addr(q.r, q.c); if (!L.rule[a] && book.ruleAt(rule.if, tab.name, q.r - top.r, q.c - top.c)) L.rule[a] = rule.style || "bad"; }); });
+    L.rule = calc.rules[tab.name.toLowerCase()] || E.map();
     return L;
   }
   function inList(tab, a) { return lookups.list[a] || null; }
@@ -735,7 +854,7 @@ if (typeof module !== "undefined") module.exports = SheetEngine;
   }
   function render() {
     rebuild(); renderTabs();
-    var tab = tabObj(); lookups = buildLookups(tab); var ds = E.drawSize(book, tab), rows = ds.rows, cols = ds.cols; state.cut = ds.cut ? rows : 0;
+    var tab = tabObj(); lookups = buildLookups(tab); var ds = E.drawSize(book, tab), rows = ds.rows, cols = ds.cols, k = E.kept(book, tab); state.cut = k.out ? k.rows : 0; state.out = k.out;
     var g = document.getElementById("grid"); g.textContent = "";
     var thead = el("thead"), hr = el("tr"); hr.appendChild(el("th", { class: "rn", scope: "col" }, ""));
     for (var c = 1; c <= cols; c++) { var th = el("th", { scope: "col" }, E.colName(c)); var w = (tab.cols || [])[c - 1]; if (w && w.w) th.style.minWidth = w.w + "px"; hr.appendChild(th); }
@@ -768,7 +887,7 @@ if (typeof module !== "undefined") module.exports = SheetEngine;
           sel.disabled = !state.loaded || !state.signedIn;
           (function (a) { sel.onchange = function (ev) { write(a, ev.target.value); }; })(a);
           td.appendChild(sel);
-        } else td.textContent = state.showF && inp && inp.formula !== undefined ? "=" + inp.formula : E.fmtValue(v, fmt, data);
+        } else td.textContent = state.showF && inp && inp.formula !== undefined ? "=" + inp.formula : shown(v, fmt);
         (function (a) { td.onclick = function (ev) { if (ev.target.tagName === "INPUT" || ev.target.tagName === "SELECT") return; select(a); }; td.ondblclick = function () { select(a); document.getElementById("fx").focus(); }; })(a);
         tr.appendChild(td);
       }
@@ -781,31 +900,11 @@ if (typeof module !== "undefined") module.exports = SheetEngine;
   function edges() { var w = document.getElementById("wrap"); document.getElementById("gridbox").classList.toggle("more-right", w.scrollLeft + w.clientWidth < w.scrollWidth - 2); }
   document.getElementById("wrap").addEventListener("scroll", edges, { passive: true });
   addEventListener("resize", edges);
-  // Every formula cell whose value differs from the same sheet with data.before's old inputs.
   var deltaRows = null;
-  function computeDelta() {
-    var before = data.before || {}, keys = Object.keys(before);
-    if (!keys.length) return [];
-    var old = JSON.parse(JSON.stringify(data));
-    keys.forEach(function (k) { var bang = k.lastIndexOf("!"), tn = k.slice(0, bang).toLowerCase(), a = k.slice(bang + 1).toUpperCase(); old.tabs.forEach(function (t) { if (t.name.toLowerCase() !== tn) return; t.cells = t.cells || {}; if (before[k] === null) delete t.cells[a]; else t.cells[a] = before[k]; }); });
-    var ob = new E.Book(old, overlay()), out = [];
-    data.tabs.forEach(function (t) {
-      var raw = book.raw[t.name.toLowerCase()];
-      Object.keys(raw).forEach(function (a) {
-        var inp = book.input(t.name, a); if (!inp || inp.formula === undefined) return;
-        if (!ob.raw[t.name.toLowerCase()] || !ob.raw[t.name.toLowerCase()][a]) return;
-        var nv = book.value(t.name, a), ov = ob.value(t.name, a);
-        if (JSON.stringify(nv) === JSON.stringify(ov)) return;
-        var p = E.parseAddr(a), head = book.value(t.name, E.addr(1, p.c)), rowName = book.value(t.name, E.addr(p.r, 1)), fmt = E.cellFmt(t, a, raw[a], inp);
-        out.push({ cell: t.name + "!" + a, label: [rowName, head].filter(function (x) { return typeof x === "string" && x; }).join(" · "), was: E.fmtValue(ov, fmt, data), now: E.fmtValue(nv, fmt, data) });
-      });
-    });
-    return out;
-  }
   function renderDelta() {
     var box = document.getElementById("delta");
     if (!data.before || !Object.keys(data.before).length) { box.hidden = true; return; }
-    deltaRows = computeDelta(); box.hidden = false;
+    deltaRows = calc.delta; box.hidden = false;
     document.getElementById("delta-note").textContent = (data.change_note ? data.change_note + ". " : "") + (deltaRows.length ? deltaRows.length + " calculated cell" + (deltaRows.length > 1 ? "s" : "") + " changed as a result." : "No calculated cell changed as a result.");
     var tb = document.getElementById("delta-table"); tb.textContent = "";
     if (!deltaRows.length) return;
@@ -834,7 +933,9 @@ if (typeof module !== "undefined") module.exports = SheetEngine;
   function renderStatus() {
     var st = document.getElementById("status"), rep = E.report(book);
     var who = !state.loaded ? "Loading people's edits…" : state.failed ? { copy: "A copy on this device: open the space's link to see people's edits.", refused: "People's edits can't load here, so this is the sheet as saved.", retry: "People's edits haven't loaded yet, so this is the sheet as saved. Trying again…" }[state.failed] : state.signedIn ? "Edits save for everyone; others' edits show within 15 s." : "Sign in to edit cells.";
-    if (state.cut) who = "Only the first " + state.cut + " rows are drawn and in the CSV; the .xlsx holds them all. " + who;
+    if (calc.late) who = "Some cells took over 2 s to work out, so they show #CALC!. " + who;
+    if (calc.here) who = "This page can't start a worker, so the sheet is worked out here, with a smaller limit. " + who;
+    if (state.cut) who = "Only the first " + state.cut + " rows are drawn and downloaded; " + state.out + " more are left out. " + who;
     if (rep.errors.length) { st.textContent = "⚠ " + rep.errors.length + " cell" + (rep.errors.length > 1 ? "s show" : " shows") + " an error: " + rep.errors.slice(0, 5).join(", ") + ". " + who; st.className = "status err"; }
     else { st.textContent = "No error cells. " + who; st.className = "status"; }
   }
@@ -845,9 +946,9 @@ if (typeof module !== "undefined") module.exports = SheetEngine;
     var host = document.getElementById("charts"); host.textContent = "";
     var tab = tabObj();
     (tab.charts || []).forEach(function (ch, idx) {
-      var labels = E.expand(ch.labels).map(function (p) { var v = book.value(tab.name, E.addr(p.r, p.c)), raw = book.raw[tab.name.toLowerCase()][E.addr(p.r, p.c)]; return E.fmtValue(v, E.cellFmt(tab, E.addr(p.r, p.c), raw) || (typeof v === "number" && v > 30000 && v < 80000 ? "month" : null), data); });
+      var labels = E.expand(ch.labels).map(function (p) { var v = book.value(tab.name, E.addr(p.r, p.c)), raw = book.raw[tab.name.toLowerCase()][E.addr(p.r, p.c)]; return shown(v, E.cellFmt(tab, E.addr(p.r, p.c), raw) || (typeof v === "number" && v > 30000 && v < 80000 ? "month" : null)); });
       var series = (ch.series || []).map(function (s) { return { name: s.name, vals: seriesValues(tab.name, s.range) }; });
-      var max = Math.max.apply(null, [0].concat(series.map(function (s) { return Math.max.apply(null, [0].concat(s.vals)); }))) || 1;
+      var max = series.reduce(function (m, s) { return s.vals.reduce(function (n, v) { return v > n ? v : n; }, m); }, 0) || 1;
       var W = 760, H = 300, L = 70, B = 60, T = 16, pw = W - L - 16, ph = H - T - B, n = labels.length || 1;
       var box = el("figure", { class: "chart", "data-ss-id": "chart-" + slug(tab.name) + "-" + idx }); box.style.margin = "0";
       box.appendChild(el("h3", null, ch.title || ""));
@@ -872,7 +973,7 @@ if (typeof module !== "undefined") module.exports = SheetEngine;
     if (!state.loaded || !state.signedIn) return;
     var tab = tabObj(), key = tab.name + "!" + a, v = value;
     if (typeof v === "string") { var s = v.trim(); if (s !== "" && s.charAt(0) !== "=" && !isNaN(Number(s.replace(/,/g, ""))) && !/^0\d/.test(s)) v = Number(s.replace(/,/g, "")); else if (/^(true|false)$/i.test(s)) v = /^true$/i.test(s); }
-    state.mine[key] = { v: v, at: new Date().toISOString() };
+    state.mine[key] = { v: v, at: new Date().toISOString() }; state.ver++;
     render(); select(a);
     fetch(API + "/records/" + COL + "/mine", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ data: { edits: state.mine } }) })
       .then(function (r) { if (!r.ok) throw new Error(r.status === 413 ? "Your edits are over the 32 KB a person can keep. Ask the owner to fold them into the sheet." : "Couldn't save (" + r.status + ")."); })
@@ -890,14 +991,14 @@ if (typeof module !== "undefined") module.exports = SheetEngine;
         var mine = (j.records || []).filter(function (x) { return x.mine; })[0];
         if (mine && mine.data && mine.data.edits && typeof mine.data.edits === "object" && !Array.isArray(mine.data.edits)) state.mine = E.map(mine.data.edits);
         (j.records || []).forEach(function (x) { if (!state.since || x.updated_at > state.since) state.since = x.updated_at; });
-        render(); setTimeout(poll, state.poll);
+        state.ver++; render(); setTimeout(poll, state.poll);
       });
     }).catch(function (e) {
       // A blip (a 429, a 5xx, the network) shouldn't leave the sheet read-only for the visit: try again,
       // after 2, 4, 8 … seconds, at most a minute apart. A copy opened from disk, or a page the records
       // service refuses (403, 404), can't get them by trying again.
       // Draw the sheet as saved, without anyone's records: one that broke the draw can't break it again.
-      state.others = []; state.me = null;
+      state.others = []; state.me = null; state.ver++;
       state.loaded = true; state.signedIn = false; state.failed = location.protocol === "file:" ? "copy" : e && (e.status === 403 || e.status === 404) ? "refused" : "retry";
       var keep = state.sel; render(); select(keep);
       if (state.failed === "retry") { state.tries = (state.tries || 0) + 1; setTimeout(function () { load(0); }, Math.min(60000, 1000 * Math.pow(2, state.tries))); }
@@ -911,6 +1012,7 @@ if (typeof module !== "undefined") module.exports = SheetEngine;
       return r.json().then(function (j) {
         var changed = false;
         (j.records || []).forEach(function (x) { if (x.mine) return; changed = true; state.others = state.others.filter(function (o) { return o.id !== x.id; }).concat([x]); if (!state.since || x.updated_at > state.since) state.since = x.updated_at; });
+        if (changed) state.ver++;
         if (changed && document.activeElement !== document.getElementById("fx")) { var keep = state.sel; render(); select(keep); }
       });
     }).catch(function () {}).then(function () { setTimeout(poll, state.poll); });
@@ -932,8 +1034,8 @@ if (typeof module !== "undefined") module.exports = SheetEngine;
   document.getElementById("show-f").onclick = function () { state.showF = !state.showF; this.setAttribute("aria-pressed", String(state.showF)); this.textContent = state.showF ? "Show values" : "Show formulas"; render(); };
   function download(name, type, bytes) { var url = URL.createObjectURL(new Blob([bytes], { type: type })), a = el("a", { href: url, download: name }); document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(url); }, 2000); }
   var base = slug(data.title || "sheet");
-  document.getElementById("dl-csv").onclick = function () { download(base + "-" + slug(tabObj().name) + ".csv", "text/csv", E.csv(book, tabObj().name)); };
-  document.getElementById("dl-xlsx").onclick = function () { download(base + ".xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", E.xlsx(book)); };
+  document.getElementById("dl-csv").onclick = function () { whenDone(function () { download(base + "-" + slug(tabObj().name) + ".csv", "text/csv", E.csv(book, tabObj().name)); }); };
+  document.getElementById("dl-xlsx").onclick = function () { whenDone(function () { download(base + ".xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", E.xlsx(book)); }); };
   var want = ""; try { want = decodeURIComponent((location.hash.match(/tab=([^&]+)/) || [])[1] || "").toLowerCase(); } catch (e) { /* a broken link opens the first tab */ }
   data.tabs.forEach(function (t, i) { if (t.name.toLowerCase() === want) { state.tab = i; state.picked = true; } });
   document.getElementById("tabs").addEventListener("click", function () { state.picked = true; });
@@ -945,7 +1047,7 @@ if (typeof module !== "undefined") module.exports = SheetEngine;
     if (!r.ok) { var st = document.getElementById("status"); st.textContent = "A batch of cells wasn't shown: " + r.why + "."; st.className = "status err"; return; }
     var now = Date.now(), tn = r.tab.toLowerCase();
     r.cells.forEach(function (a) { stamps[tn + "!" + a] = now; });
-    savedAt = now;
+    savedAt = now; state.ver++;
     if (!state.picked) data.tabs.forEach(function (t, i) { if (t.name === r.tab) state.tab = i; });
     var keep = state.sel; render(); select(keep);
   });

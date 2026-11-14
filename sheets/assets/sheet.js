@@ -55,6 +55,12 @@ function buildPage(starter, sheet) {
   }
   return page;
 }
+// The worker file saved beside the page: the starter's engine plus its worker lines, the same text the page starts
+// a worker from. Pages whose rules refuse a worker made from the page's own text (a new account's) load this file.
+function workerFile(starter) {
+  const part = (re, what) => { const m = re.exec(starter); if (!m) throw new Error(`the starter has no ${what}`); return m[1]; };
+  return part(/<script id="sheet-engine">([\s\S]*?)<\/script>/, "engine") + "\n" + part(/<script type="text\/plain" id="sheet-worker">([\s\S]*?)<\/script>/, "worker lines");
+}
 // One live edit: the delta block, replaced on every open tab; the page's listener draws it.
 const deltaEdit = (tab, cells) => ({ anchor: "sheet-delta", op: "replace",
   html: `<script type="application/json" id="sheet-delta" data-ss-id="sheet-delta">${scriptJson({ tab, cells, at: Date.now() })}</script>` });
@@ -167,7 +173,7 @@ function engine() {
   vm.runInNewContext(m[1], box);
   return box.module.exports;
 }
-module.exports = { buildPage, deltaEdit, batches, frame, assemble, fill, shiftFormula, checkSheet, scriptJson, escText, engine };
+module.exports = { buildPage, workerFile, deltaEdit, batches, frame, assemble, fill, shiftFormula, checkSheet, scriptJson, escText, engine };
 if (require.main !== module) return;
 
 // --- the commands ---
@@ -195,7 +201,9 @@ const sentFile = path.join(ST, "sent.json"), pubFile = path.join(ST, "published"
 function publish(sheet, message) {
   const s = Object.assign({}, sheet, { saved_at: sheet.saved_at || new Date().toISOString().replace(/\.\d+Z$/, "Z") });
   fs.mkdirSync(WORK, { recursive: true });
-  fs.writeFileSync(path.join(WORK, "index.html"), buildPage(fs.readFileSync(STARTER, "utf8"), s));
+  const starter = fs.readFileSync(STARTER, "utf8");
+  fs.writeFileSync(path.join(WORK, "index.html"), buildPage(starter, s));
+  fs.writeFileSync(path.join(WORK, "sheet-worker.js"), workerFile(starter));
   run(["deploy", WORK, "--space", space, "-m", message]);
   fs.writeFileSync(pubFile, new Date().toISOString());
 }
@@ -205,7 +213,9 @@ if (cmd === "start") {
     if (space) die("start: this folder already has a space; use another folder for a new one");
     const sheet = { title: plain("title", rest[1]) || "Sheet", tabs: [{ name: "Sheet1", freeze: 1, cells: {} }] };
     fs.mkdirSync(WORK, { recursive: true });
-    fs.writeFileSync(path.join(WORK, "index.html"), buildPage(fs.readFileSync(STARTER, "utf8"), sheet));
+    const starter = fs.readFileSync(STARTER, "utf8");
+    fs.writeFileSync(path.join(WORK, "index.html"), buildPage(starter, sheet));
+    fs.writeFileSync(path.join(WORK, "sheet-worker.js"), workerFile(starter));
     const out = run(["deploy", WORK, "--title", sheet.title, "--emoji", "🧮", "--json"]);
     const j = JSON.parse(out.slice(out.indexOf("{")));
     space = (j.space || j).uuid || (j.space || j).id;

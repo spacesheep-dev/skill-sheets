@@ -89,6 +89,12 @@ module.exports = function ({ E, test, script, within, ROOT }) {
     assert.strictEqual(one("=SUMPRODUCT((A1:A20=0)*(A1:T1=0))"), 400); // a small one still works
     assert.ok(Date.now() - t0 < 4000, `took ${Date.now() - t0} ms`);
   });
+  test("text a formula makes is charged by its length, not only by its cells", () => {
+    const t = (b1) => within(3000, () => new E.Book({ tabs: [{ name: "T", cells: { B1: b1, C1: "=SUMPRODUCT(LEN(UPPER(A1:A2000&B1)))" } }] }).value("T", "C1"));
+    assert.strictEqual(t("x"), 2000);
+    assert.strictEqual(errOf(t("x".repeat(8192))), "#CALC!"); // 2,000 x 8,192 characters, twice
+    assert.strictEqual(E.LIMIT.text, 32767); // Excel's most characters in a cell
+  });
   // --- a person's record ---
   test("a malformed edit in a person's record is skipped; the good ones still count", () => {
     const edits = {
@@ -165,8 +171,20 @@ module.exports = function ({ E, test, script, within, ROOT }) {
     const corner = E.colName(E.LIMIT.cols) + E.LIMIT.rows;
     const b = new E.Book({ tabs: [{ name: "T", cells: { A1: "x" } }] }, { t: { [corner]: { v: 1, at: "2026-11-14T10:00:00Z", by: "Sam", peer: true } } });
     const lines = within(3000, () => E.csv(b, "T")).trim().split("\r\n");
-    assert.ok(lines.length * E.LIMIT.cols <= E.LIMIT.cells, String(lines.length));
-    assert.match(script("sheet-ui"), /drawn and in the CSV; the \.xlsx holds them all/);
+    assert.ok((lines.length - 1) * E.LIMIT.cols <= E.LIMIT.cells, String(lines.length)); // the last line says what was left out
+  });
+  test("CSV and .xlsx hold the same rows, and say how many were left out", () => {
+    const corner = E.colName(E.LIMIT.cols) + E.LIMIT.rows;
+    const b = new E.Book({ tabs: [{ name: "T", cells: { A1: "x", A2: 2 } }] }, { t: { [corner]: { v: 1, at: "2026-11-14T10:00:00Z", by: "Sam", peer: true } } });
+    const k = E.kept(b, b.tabs.t), lines = E.csv(b, "T").trim().split("\r\n");
+    assert.ok(k.out > 0 && k.rows + k.out === E.LIMIT.rows, JSON.stringify(k));
+    assert.strictEqual(lines.length, k.rows + 1);
+    assert.match(lines[lines.length - 1], new RegExp(`^${k.out} more rows aren't in this file`));
+    const xml = Buffer.from(E.xlsx(b)).toString("utf8"), rows = [...xml.matchAll(/<row r="(\d+)"/g)].map((m) => +m[1]);
+    assert.ok(Math.max(...rows) === k.rows + 1, String(Math.max(...rows)));
+    assert.ok(!xml.includes(`r="${corner}"`));
+    assert.match(xml, new RegExp(`${k.out} more rows aren't in this file`));
+    assert.match(script("sheet-ui"), /drawn and downloaded/);
   });
   test("CSV: text starting with = + - or @ gets a leading apostrophe; numbers don't", () => {
     const rows = parseCsv(E.csv(exportBook(), "Budget"));
@@ -183,6 +201,31 @@ module.exports = function ({ E, test, script, within, ROOT }) {
     assert.strictEqual(rows[2][4], "20"); // your own formula: its value, as for the sheet's
   });
 
+  // --- the worker ---
+  test("the worker file sheet.js saves is the page's engine plus its worker lines, and it works the sheet out", () => {
+    const vm = require("vm"), page = fs.readFileSync(path.join(ROOT, "sheets/references/sheet-template.html"), "utf8");
+    const code = S.workerFile(page);
+    assert.strictEqual(code, script("sheet-engine") + "\n" + /<script type="text\/plain" id="sheet-worker">([\s\S]*?)<\/script>/.exec(page)[1]);
+    const said = [], self = { postMessage: (m) => said.push(JSON.parse(JSON.stringify(m))) };
+    vm.runInNewContext(code, { self, TextEncoder, Intl, Date, Math, JSON });
+    self.onmessage({ data: { id: 7, data: { tabs: [{ name: "T", cells: { A1: 2, A2: "=A1*21", Z1: "=SUM(A1:T10000)+SUM(A1:T10000)" } }] }, overlay: {} } });
+    const done = said.find((m) => m.done);
+    assert.strictEqual(done.id, 7);
+    assert.strictEqual(done.done.values["t!A2"], 42);
+    assert.strictEqual(done.done.values["t!Z1"], 88); // (2 + 42) twice
+    const eight = "=" + Array(8).fill("SUM(A1:T10000)").join("+"); // 1.6M cells read, and passed over again: 3.2M steps
+    self.onmessage({ data: { id: 8, data: { tabs: [{ name: "T", cells: { Z1: eight } }] }, overlay: {} } });
+    assert.strictEqual(said.find((m) => m.id === 8 && m.done).done.values["t!Z1"], 0); // inside the worker's 10M budget
+    assert.strictEqual(new E.Book({ tabs: [{ name: "T", cells: { Z1: eight } }] }).value("T", "Z1").e, "#CALC!"); // the page's own stays 3M
+  });
+  test("the page works the sheet out only in a worker, with a 2 s limit, and says so when it can't", () => {
+    const ui = script("sheet-ui");
+    assert.match(ui, /LIMIT_MS = 2000/);
+    assert.match(ui, /new Worker\(BASE \+ "\/sheet-worker\.js"\)/);
+    assert.match(ui, /can't start a worker, so the sheet is worked out here, with a smaller limit/);
+    assert.doesNotMatch(ui, /LIMIT\.steps\s*=/); // the larger budget is set only inside the worker
+    assert.doesNotMatch(ui.replace(/E\.calc\(calc\.msg\.data, calc\.msg\.overlay\)/, ""), /\.ruleAt\(|E\.calc\(/); // nothing else works anything out on the page
+  });
   // --- property: random formulas and records, each case under a time limit ---
   test("property: 2,000 random sheets of formulas and people's records each finish in 3 s, with plain values and no prototype touched", () => {
     let seed = 20261114;
