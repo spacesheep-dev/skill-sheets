@@ -243,12 +243,44 @@ module.exports = function ({ E, test, script, within, ROOT }) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sheets-test-")), bin = path.join(dir, "bin");
     fs.mkdirSync(bin); fs.mkdirSync(path.join(dir, "w", ".sheet"), { recursive: true });
     // A stand-in for the spacesheep CLI: it refuses the commands named in failOn, and answers the rest.
-    fs.writeFileSync(path.join(bin, "spacesheep"), `#!/bin/sh\ncase " $* " in\n${failOn.map((w) => `  *" ${w} "*) echo "refused: $1" >&2; exit 1;;`).join("\n")}\nesac\ncat >/dev/null\necho '{"tabs_open":1}'\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(bin, "spacesheep"), `#!/bin/sh\necho "$*" >> ${dir}/calls.log\ncase " $* " in\n${failOn.map((w) => `  *" ${w} "*) echo "refused: $1" >&2; exit 1;;`).join("\n")}\n  *" spaces get "*) echo "  id: 00000000-0000-4000-8000-000000000000"; exit 0;;\nesac\ncat >> ${dir}/calls.log\necho '{"tabs_open":1}'\n`, { mode: 0o755 });
     fs.writeFileSync(path.join(dir, "w", ".sheet", "space"), "00000000-0000-4000-8000-000000000000");
     fs.writeFileSync(path.join(dir, "w", "data.json"), JSON.stringify({ title: "T", tabs: [{ name: "Budget", freeze: 1, cells: { A1: "Item" } }] }));
     const run = (...args) => spawnSync(process.execPath, [SHEET_JS, "-C", path.join(dir, "w"), ...args], { encoding: "utf8", env: Object.assign({}, process.env, { PATH: `${bin}:${process.env.PATH}` }) });
-    return { dir, run, sent: () => fs.existsSync(path.join(dir, "w", ".sheet", "sent.json")) };
+    return { dir, run, sent: () => fs.existsSync(path.join(dir, "w", ".sheet", "sent.json")), calls: () => fs.readFileSync(path.join(dir, "calls.log"), "utf8") };
   }
+  // --- the skill in two parts: start names the sheet; the first push prints the rest ---
+  const BUILD = fs.readFileSync(path.join(ROOT, "sheets/references/build.md"), "utf8").split("\n")[0];
+  test("start puts the title and the named tabs on screen, and seeds data.json with them", () => {
+    const f = folder([]);
+    fs.rmSync(path.join(f.dir, "w"), { recursive: true }); fs.mkdirSync(path.join(f.dir, "w"));
+    const r = f.run("start", "https://example.invalid/@j/s", "Bike shop budget", "Summary", "Budget", "Transactions");
+    assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+    assert.match(f.calls(), /<h1 data-ss-id=\\?"title\\?">Bike shop budget<\/h1>/);
+    assert.match(f.calls(), /\\"name\\": ?\\"Transactions\\"/);
+    const d = JSON.parse(fs.readFileSync(path.join(f.dir, "w", "data.json"), "utf8"));
+    assert.deepStrictEqual([d.title, d.tabs.map((t) => t.name)], ["Bike shop budget", ["Summary", "Budget", "Transactions"]]);
+    assert.match(r.stdout, /# The sheet's JSON block/); // the format, printed by start
+    assert.doesNotMatch(r.stdout, new RegExp(BUILD.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    const bad = f.run("start", "https://example.invalid/@j/s", "T", "Q1/Q2");
+    assert.notStrictEqual(bad.status, 0);
+    assert.match(bad.stderr, /tab name/);
+  });
+  test("the first push prints the rest of the skill; rows before it are refused, with it", () => {
+    const f = folder([]);
+    const frame = f.run("push", "Writing Budget");
+    assert.strictEqual(frame.status, 0, frame.stderr);
+    assert.ok(frame.stdout.includes(BUILD), "the first push didn't print build.md");
+    const g = folder([]);
+    fs.mkdirSync(path.join(g.dir, "w", "cells"));
+    fs.writeFileSync(path.join(g.dir, "w", "cells", "01-rows.json"), JSON.stringify({ tab: "Budget", cells: { A2: "Rent" } }));
+    const early = g.run("push", "Budget: 1 line in");
+    assert.notStrictEqual(early.status, 0);
+    assert.ok(early.stdout.includes(BUILD));
+    assert.strictEqual(g.sent(), false);
+    const again = g.run("push", "Budget: 1 line in");
+    assert.strictEqual(again.status, 0, again.stderr);
+  });
   test("sheet.js: a page push and a save that both fail exit non-zero and mark nothing sent, so a retry sends it", () => {
     const f = folder(["call", "deploy"]);
     const r = f.run("push", "Writing Budget");
