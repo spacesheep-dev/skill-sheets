@@ -313,7 +313,7 @@ module.exports = function ({ E, test, script, within, ROOT }) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sheets-test-")), bin = path.join(dir, "bin");
     fs.mkdirSync(bin); fs.mkdirSync(path.join(dir, "w", ".sheet"), { recursive: true });
     // A stand-in for the spacesheep CLI: it refuses the commands named in failOn, and answers the rest.
-    const refuse = (words) => fs.writeFileSync(path.join(bin, "spacesheep"), `#!/bin/sh\necho "$*" >> ${dir}/calls.log\ncase " $* " in\n${words.map((w) => `  *" ${w} "*) echo "refused: $1" >&2; exit 1;;`).join("\n")}\n  *" spaces get "*) echo "  id: 00000000-0000-4000-8000-000000000000"; exit 0;;\nesac\ncat >> ${dir}/calls.log\necho >> ${dir}/calls.log\necho '{"tabs_open":1}'\n`, { mode: 0o755 });
+    const refuse = (words, said = "refused: $1") => fs.writeFileSync(path.join(bin, "spacesheep"), `#!/bin/sh\necho "$*" >> ${dir}/calls.log\ncase " $* " in\n${words.map((w) => `  *" ${w} "*) echo "${said}" >&2; exit 1;;`).join("\n")}\n  *" spaces get "*) echo "  id: 00000000-0000-4000-8000-000000000000"; exit 0;;\nesac\ncat >> ${dir}/calls.log\necho >> ${dir}/calls.log\necho '{"tabs_open":1}'\n`, { mode: 0o755 });
     refuse(failOn);
     fs.writeFileSync(path.join(dir, "w", ".sheet", "space"), "00000000-0000-4000-8000-000000000000");
     fs.writeFileSync(path.join(dir, "w", "data.json"), JSON.stringify({ title: "T", tabs: [{ name: "Budget", freeze: 1, cells: { A1: "Item" } }] }));
@@ -400,6 +400,38 @@ module.exports = function ({ E, test, script, within, ROOT }) {
     const pushedAt = lines.findIndex((l) => l.startsWith('{"space_id"') && l.includes(JSON.stringify(pages[1]).slice(1, 200)));
     assert.ok(pushedAt >= 0 && pushedAt < lines.findIndex((l, i) => i > pushedAt && l.startsWith("deploy ")), "the page went live after the save");
     assert.deepStrictEqual(afterSave(f), [], "something was sent after the save");
+  });
+  // A tab behind another, or a busy one, doesn't say it drew a push: the build carries on, and the save reaches it.
+  const UNSEEN = "unavailable: Sent, but no tab confirmed it within 2 s. Nothing was published.";
+  test("sheet.js: a page push no open tab confirmed still counts as sent, and the first save follows it", () => {
+    const f = folder(["call"]);
+    f.refuse(["call"], UNSEEN);
+    const r = f.run("push", "Writing Budget");
+    assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /no open tab confirmed it/);
+    assert.strictEqual(f.sent(), true);
+    assert.match(f.calls(), /^deploy /m); // the first save, which every tab takes when it can
+  });
+  test("sheet.js: batches no open tab confirmed still count as sent, and the status is shown all the same", () => {
+    const f = folder([]);
+    assert.strictEqual(f.run("push", "Writing Budget").status, 0);
+    const cells = {};
+    for (let r = 2; r <= 1201; r++) cells["A" + r] = "Row " + r;
+    fs.mkdirSync(path.join(f.dir, "w", "cells"));
+    fs.writeFileSync(path.join(f.dir, "w", "cells", "01-rows.json"), JSON.stringify({ tab: "Budget", cells }));
+    f.refuse(["call"], UNSEEN);
+    const r = f.run("push", "Budget: 1,200 rows in");
+    assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /3 that no open tab confirmed/);
+    assert.match(f.calls().trim().split("\n").pop(), / --status Budget: 1,200 rows in$/);
+    f.refuse([]);
+    assert.match(f.run("push").stdout, /no cell changed/);
+  });
+  test("sheet.js: any other refusal of a push still fails it, so it's sent again", () => {
+    const f = folder(["call"]);
+    f.refuse(["call"], "unavailable: A service behind the call is down or unreachable.");
+    assert.notStrictEqual(f.run("push", "Writing Budget").status, 0);
+    assert.strictEqual(f.sent(), false);
   });
   test("sheet.js: the first save goes before the push's status, so the card says Done for a moment, not until the next status", () => {
     const f = folder([]);

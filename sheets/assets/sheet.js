@@ -295,13 +295,19 @@ if (cmd === "start") {
 
 // The sheet on every open tab: the whole page when its frame changed (the first push is also saved, so a
 // later visitor sees it), else only the changed cells, in batches. The status goes with the push.
+// "No tab confirmed it": the push went out, but no open tab said it drew it within 2 s (a tab behind another, a
+// busy one). The build never waits on a tab: it carries on, and the next save brings every tab up to date.
+const unseen = (e) => /no tab confirmed/.test(String(e.stderr || e.message));
 function pushSheet(sheet, say) {
   const sent = fs.existsSync(sentFile) ? JSON.parse(fs.readFileSync(sentFile, "utf8")) : null;
   if (!sent || frame(sent) !== frame(sheet)) {
     const page = pageOf(sheet);
     // A page and a status can't go in one call (the API takes one or the other); a batch and a status can.
     try { const a = live({ html: page }); console.log(`pushed the whole page (${page.length} bytes${seen(a)}, ${took()})`); }
-    catch (e) { console.error(`page push refused: ${why(e)}. Nothing is marked sent: push again`); return false; }
+    catch (e) {
+      if (!unseen(e)) { console.error(`page push refused: ${why(e)}. Nothing is marked sent: push again`); return false; }
+      console.log(`the whole page went out, but no open tab confirmed it: carrying on, and the save brings that tab up to date (${took()})`);
+    }
     fs.writeFileSync(sentFile, JSON.stringify(sheet));
     // The first save goes before the status: open tabs say Done on a save and take the work card down, and the
     // status after it puts the card straight back, so a sheet of headers isn't shown as done until the next status.
@@ -311,18 +317,21 @@ function pushSheet(sheet, say) {
   }
   const bs = batches(sent, sheet);
   if (!bs.length) { const saved = firstSave(sheet, say); if (say) status(say); console.log("no cell changed since the last push"); return saved; }
-  let done = 0, last = {};
+  let done = 0, last = {}, unconfirmed = 0;
   for (const [i, b] of bs.entries()) {
     const line = bs.length > 1 ? `${say || "Writing cells"} (${i + 1} of ${bs.length})` : say;
-    try { last = live(Object.assign({ edits: [deltaEdit(b.tab, b.cells)] }, line ? { status: line.slice(0, 200) } : {})); done += Object.keys(b.cells).length; }
-    catch (e) { console.error(`batch ${i + 1} refused: ${why(e)}`); return false; }
+    try { last = live(Object.assign({ edits: [deltaEdit(b.tab, b.cells)] }, line ? { status: line.slice(0, 200) } : {})); }
+    catch (e) { if (!unseen(e)) { console.error(`batch ${i + 1} refused: ${why(e)}`); return false; } unconfirmed++; }
+    done += Object.keys(b.cells).length;
     const was = JSON.parse(fs.readFileSync(sentFile, "utf8")), t = was.tabs.find((x) => x.name === b.tab);
     t.cells = Object.assign(t.cells || {}, b.cells); for (const a of Object.keys(b.cells)) if (b.cells[a] === null) delete t.cells[a];
     fs.writeFileSync(sentFile, JSON.stringify(was));
   }
-  console.log(`pushed ${done} cell${done === 1 ? "" : "s"} in ${bs.length} batch${bs.length === 1 ? "" : "es"}${seen(last)} (${took()})`);
+  console.log(`pushed ${done} cell${done === 1 ? "" : "s"} in ${bs.length} batch${bs.length === 1 ? "" : "es"}${unconfirmed ? `, ${unconfirmed} that no open tab confirmed: carrying on, and the save brings that tab up to date` : seen(last)} (${took()})`);
   const first = !fs.existsSync(pubFile), saved = firstSave(sheet, say);
-  if (first && saved && say) status(say); // the card back up after a first save that a batch's status came before
+  // The status again: after a first save, which a batch's status came before, it puts the card back up; after a
+  // batch no tab confirmed, it shows what's being done all the same.
+  if (say && ((first && saved) || unconfirmed)) status(say);
   return saved;
 }
 // What's pushed (sent.json) and whether it's saved (published) are kept apart. Until the sheet has been saved once,
