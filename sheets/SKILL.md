@@ -87,9 +87,10 @@ thing instead.
    starts, each column's width and format. No rows, no amounts, no formulas, and don't open
    `references/functions.md` yet: that comes after this push. Give each thing people update
    its own tab (one per team, one list of tasks), and put what people only read on its own
-   tab ("Summary", "By month"). **List the summary tab first,** so the sheet opens on it,
-   then the tabs people update. Inputs on the left, calculated columns on the right, one
-   header row, frozen. Tab names are short and plain, at most 31 characters, with none of
+   tab ("Summary", "By month"). **List the summary tab first, by its name only,** so the
+   sheet opens on it: its headers and layout come when you write it, last. Then the tabs
+   people update. Inputs on the left, calculated columns on the right, one header row,
+   frozen. Tab names are short and plain, at most 31 characters, with none of
    `[ ] : * ? / \`. Moving a table after this push sends the whole page again.
    Write `data.json` and push it in one command: `title`, `lede` (one or two sentences:
    what the sheet holds, who updates it, that the figures are examples), `description`,
@@ -134,6 +135,8 @@ glance. A summary full of zeros or a −94% margin reads as a broken sheet.
   some activity; income and costs land where a healthy small business would be.
 - **Tables of periods start where the examples are.** The examples' dates sit in the
   periods the summary shows, and the month a summary opens on has data.
+- **A table by period covers the whole period its title names.** Periods with nothing in
+  yet are left blank, never zero.
 - **Say once that they're examples:** in the lede and in your reply, never "Example" on
   every row. Name them plainly ("Example customer") only where a person must replace each.
 - **Never present invented figures as real.** `sheet.js check` fails when a column of

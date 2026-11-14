@@ -130,6 +130,11 @@ var SheetEngine = (function () {
   // --- addresses: one check for every address and range, wherever it comes from (a saved page, a batch, a
   // person's edit, a formula), and the most the page will draw or work out ---
   var LIMIT = { rows: 10000, cols: 1000, cells: 200000, steps: 3000000, text: 32767 };
+  // Every map keyed by something a person can type or send (a tab name, an address, an edit key, a function's or
+  // a format's name) has no prototype, so "__proto__" or "constructor" is only ever a key.
+  function map(o) { var m = Object.create(null); if (o) Object.keys(o).forEach(function (k) { m[k] = o[k]; }); return m; }
+  var cur = null; // the book being worked out, so a function can charge its work to that book's budget
+  function charge(n) { if (cur && (cur.steps += n) > LIMIT.steps) throw "#CALC!"; }
   function colNum(s) { var n = 0; for (var i = 0; i < s.length; i++) n = n * 26 + (s.charCodeAt(i) - 64); return n; }
   function colName(n) { var s = ""; while (n > 0) { var m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
   function inside(p) { return !!p && p.r >= 1 && p.r <= LIMIT.rows && p.c >= 1 && p.c <= LIMIT.cols; }
@@ -218,7 +223,7 @@ var SheetEngine = (function () {
     return ERR("#VALUE!");
   }
   function text(s) { return s.length > LIMIT.text ? ERR("#VALUE!") : s; } // Excel's longest cell text
-  function str(v) { if (v === null) return ""; if (typeof v === "boolean") return v ? "TRUE" : "FALSE"; if (typeof v === "number") return String(Math.round(v * 1e10) / 1e10); return String(v); }
+  function str(v) { if (v === null || v === undefined) return ""; if (typeof v === "boolean") return v ? "TRUE" : "FALSE"; if (typeof v === "number") return String(Math.round(v * 1e10) / 1e10); return String(v); }
   function bool(v) { if (isErr(v)) return v; if (typeof v === "string") { var u = v.toUpperCase(); if (u === "TRUE") return true; if (u === "FALSE") return false; return ERR("#VALUE!"); } return !!num(v); }
   function flat(args) { var out = []; args.forEach(function (a) { if (isRange(a)) a.rows.forEach(function (r) { r.forEach(function (c) { out.push({ v: c, fromRange: true }); }); }); else out.push({ v: a, fromRange: false }); }); return out; }
   function nums(args) { var out = []; var bad = null; flat(args).forEach(function (x) { var v = x.v; if (isErr(v)) { bad = bad || v; return; } if (x.fromRange) { if (typeof v === "number") out.push(v); } else { var n = num(v); if (isErr(n)) bad = bad || n; else out.push(n); } }); return bad || out; }
@@ -230,7 +235,7 @@ var SheetEngine = (function () {
     var op = "=", rhs = c;
     if (typeof c === "string") { var m = /^(<=|>=|<>|=|<|>)(.*)$/.exec(c); if (m) { op = m[1]; rhs = m[2]; } }
     var rn = (typeof rhs === "number") ? rhs : (typeof rhs === "boolean" ? null : (rhs !== "" && !isNaN(Number(rhs)) ? Number(rhs) : (ISO.test(String(rhs)) ? num(String(rhs)) : null)));
-    var rs = str(rhs).toLowerCase(), wild = /[*?]/.test(rs) ? new RegExp("^" + rs.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$") : null;
+    var rs = str(rhs).toLowerCase(), wild = /[*?]/.test(rs) ? { test: function (s) { return glob(rs, s); } } : null;
     return function (v) {
       if (isErr(v)) return false;
       if (typeof rhs === "boolean") return op === "<>" ? v !== rhs : v === rhs;
@@ -241,6 +246,21 @@ var SheetEngine = (function () {
       if (op === "<>") return rhs === "" ? !(v === null || v === "") : (wild ? !wild.test(vs) : vs !== rs);
       return op === "<" ? vs < rs : op === ">" ? vs > rs : op === "<=" ? vs <= rs : vs >= rs;
     };
+  }
+  // Excel's wildcards, * for any run and ? for one character, matched by walking the text: no regular expression is
+  // ever built from a cell or a criterion. At most len(p) x len(s) steps, each charged to the book's budget.
+  function glob(p, s) {
+    var i = 0, j = 0, star = -1, mark = 0, n = 0;
+    while (j < s.length) {
+      if (++n === 4096) { charge(n); n = 0; }
+      if (i < p.length && p[i] !== "*" && (p[i] === "?" || p[i] === s[j])) { i++; j++; }
+      else if (i < p.length && p[i] === "*") { star = i++; mark = j; }
+      else if (star >= 0) { i = star + 1; j = ++mark; }
+      else { charge(n); return false; }
+    }
+    while (i < p.length && p[i] === "*") i++;
+    charge(n);
+    return i === p.length;
   }
   function ifs(args, agg) { // (target, crit_range1, crit1, ...) or COUNTIFS (crit_range1, crit1, ...)
     var target = agg === "count" ? null : grid(args[0]), pairs = agg === "count" ? args : args.slice(1), out = [];
@@ -255,8 +275,7 @@ var SheetEngine = (function () {
   function round(x, d, mode) { var f = Math.pow(10, d); var y = x * f; y = mode === "up" ? (y < 0 ? -Math.ceil(-y - 1e-9) : Math.ceil(y - 1e-9)) : mode === "down" ? (y < 0 ? -Math.floor(-y + 1e-9) : Math.floor(y + 1e-9)) : (y < 0 ? -Math.round(-y + 1e-9) : Math.round(y + 1e-9)); return y / f; }
   function addMonths(s, n) { var d = fromSerial(s), m = d.m - 1 + n, y = d.y + Math.floor(m / 12); m = ((m % 12) + 12) % 12; var last = new Date(Date.UTC(y, m + 1, 0)).getUTCDate(); return serial(y, m + 1, Math.min(d.d, last)); }
 
-  var LAZY = { IF: 1, IFERROR: 1, IFNA: 1, IFS: 1, AND: 0, OR: 0 };
-  var F = {
+  var F = map({
     SUM: function (a) { var n = nums(a); return isErr(n) ? n : n.reduce(function (s, x) { return s + x; }, 0); },
     PRODUCT: function (a) { var n = nums(a); return isErr(n) ? n : n.reduce(function (s, x) { return s * x; }, 1); },
     AVERAGE: function (a) { var n = nums(a); return isErr(n) ? n : n.length ? n.reduce(function (s, x) { return s + x; }, 0) / n.length : ERR("#DIV/0!"); },
@@ -309,7 +328,7 @@ var SheetEngine = (function () {
     MATCH: function (a) { var key = a[0], fl = flat([a[1]]).map(function (x) { return x.v; }), type = a.length > 2 ? num(a[2]) : 1, hit = -1; for (var i = 0; i < fl.length; i++) { if (type === 0) { if (lookupEq(fl[i], key)) { hit = i; break; } } else if (typeof fl[i] === "number" && typeof key === "number" && (type > 0 ? fl[i] <= key : fl[i] >= key)) hit = i; else if (lookupEq(fl[i], key)) hit = i; } return hit < 0 ? ERR("#N/A") : hit + 1; },
     INDEX: function (a) { var g = grid(a[0]), r = num(a[1] === undefined ? 1 : a[1]), c = num(a.length > 2 ? a[2] : 1); if (isErr(r)) return r; if (isErr(c)) return c; if (g.length === 1 && a.length === 2) { c = r; r = 1; } if (r < 1 || c < 1 || r > g.length || c > (g[0] || []).length) return ERR("#REF!"); return g[r - 1][c - 1]; },
     XLOOKUP: function (a) { var key = a[0], keys = flat([a[1]]).map(function (x) { return x.v; }), vals = flat([a[2]]).map(function (x) { return x.v; }); if (keys.length !== vals.length) return ERR("#VALUE!"); for (var i = 0; i < keys.length; i++) if (lookupEq(keys[i], key)) return vals[i]; return a.length > 3 ? a[3] : ERR("#N/A"); }
-  };
+  });
   F.CONCATENATE = F.CONCAT;
   // Functions Excel stores with a prefix in an .xlsx file.
   var XLFN = ["CONCAT", "IFS", "IFNA", "MAXIFS", "MINIFS", "XLOOKUP"];
@@ -318,16 +337,16 @@ var SheetEngine = (function () {
   // --- the book: tabs, cells, evaluation ---
   function Book(data, overlay) {
     this.data = data; this.overlay = overlay || {};
-    this.tabs = {}; this.order = [];
+    this.tabs = map(); this.order = [];
     var self = this;
     (data.tabs || []).forEach(function (t) { self.tabs[t.name.toLowerCase()] = t; self.order.push(t.name); });
-    this.memo = {}; this.busy = {}; this.raw = {}; this.sizes = {}; this.steps = 0;
+    this.memo = map(); this.busy = map(); this.raw = map(); this.sizes = map(); this.steps = 0;
     this.order.forEach(function (n) { self.raw[n.toLowerCase()] = self.rawCells(self.tabs[n.toLowerCase()]); });
   }
   Book.prototype.rawCells = function (tab) {
-    var out = {}, cells = tab.cells || {};
+    var out = map(), cells = tab.cells || {};
     Object.keys(cells).forEach(function (a) { var c = cells[a], p = parseAddr(a); if (p) out[addr(p.r, p.c)] = (c !== null && typeof c === "object" && !Array.isArray(c)) ? c : { v: c }; });
-    var ov = this.overlay[tab.name.toLowerCase()] || {};
+    var ov = (Object.prototype.hasOwnProperty.call(this.overlay, tab.name.toLowerCase()) && this.overlay[tab.name.toLowerCase()]) || {};
     Object.keys(ov).forEach(function (a) { if (!isCell(a)) return; var base = out[a] || {}; out[a] = Object.assign({}, base, { v: ov[a].v, f: undefined, by: ov[a].by, at: ov[a].at, peer: !!ov[a].peer }); });
     return out;
   };
@@ -356,6 +375,7 @@ var SheetEngine = (function () {
       this.busy[key] = true;
       try { v = ++this.steps > LIMIT.steps ? ERR("#CALC!") : this.evaluate(parse(inp.formula), tabName, 0, 0); } catch (e) { v = ERR(typeof e === "string" ? e : "#ERROR!"); }
       if (isRange(v)) v = v.rows[0][0];
+      if (v === undefined) v = ERR("#VALUE!"); // a function given too few arguments
       if (typeof v === "number" && !isFinite(v)) v = ERR("#NUM!");
       if (v === 0) v = 0; // no "-0"
       delete this.busy[key];
@@ -379,8 +399,9 @@ var SheetEngine = (function () {
     for (var r = s.r0; r <= s.r1; r++) { var row = []; for (var c = s.c0; c <= s.c1; c++) row.push(this.value(tabName, addr(r, c))); rows.push(row); }
     return parts[1] ? { range: true, rows: rows } : rows[0][0];
   };
+  var KEEP_RANGE = null;
   Book.prototype.evaluate = function (n, here, dr, dc) {
-    var self = this;
+    var self = this; cur = this;
     function ev(x) { return self.evaluate(x, here, dr, dc); }
     switch (n.k) {
       case "lit": return n.v;
@@ -396,7 +417,7 @@ var SheetEngine = (function () {
         if (f === "IFS") { for (var i = 0; i + 1 < n.a.length; i += 2) { var t = bool(ev(n.a[i])); if (isErr(t)) return t; if (t) return ev(n.a[i + 1]); } return ERR("#N/A"); }
         if (!F[f]) return ERR("#NAME?");
         var args = n.a.map(ev);
-        var keepRange = { SUM: 1, PRODUCT: 1, AVERAGE: 1, MIN: 1, MAX: 1, COUNT: 1, COUNTA: 1, COUNTBLANK: 1, COUNTIF: 1, COUNTIFS: 1, SUMIF: 1, SUMIFS: 1, AVERAGEIF: 1, AVERAGEIFS: 1, MAXIFS: 1, MINIFS: 1, SUMPRODUCT: 1, AND: 1, OR: 1, CONCAT: 1, CONCATENATE: 1, VLOOKUP: 1, MATCH: 1, INDEX: 1, XLOOKUP: 1 };
+        var keepRange = KEEP_RANGE || (KEEP_RANGE = map({ SUM: 1, PRODUCT: 1, AVERAGE: 1, MIN: 1, MAX: 1, COUNT: 1, COUNTA: 1, COUNTBLANK: 1, COUNTIF: 1, COUNTIFS: 1, SUMIF: 1, SUMIFS: 1, AVERAGEIF: 1, AVERAGEIFS: 1, MAXIFS: 1, MINIFS: 1, SUMPRODUCT: 1, AND: 1, OR: 1, CONCAT: 1, CONCATENATE: 1, VLOOKUP: 1, MATCH: 1, INDEX: 1, XLOOKUP: 1 }));
         if (!keepRange[f] && args.some(isRange)) { // element by element, as inside SUMPRODUCT
           var shape = args.filter(isRange)[0].rows, out = [];
           for (var rr = 0; rr < shape.length; rr++) { var orow = []; for (var c2 = 0; c2 < shape[0].length; c2++) orow.push(F[f](args.map(function (v) { if (!isRange(v)) return v; var g = v.rows; return (g[g.length === 1 ? 0 : rr] || [])[g[0].length === 1 ? 0 : c2]; }))); out.push(orow); }
@@ -446,6 +467,12 @@ var SheetEngine = (function () {
     try { walk(parse(formula)); } catch (e) { return false; }
     return ok;
   };
+  // What a download holds for a cell: its input and value, or, for a formula that may not go live, its own text.
+  Book.prototype.exported = function (tabName, a) {
+    var t = this.raw[String(tabName).toLowerCase()], raw = t ? t[a] : undefined, inp = this.input(tabName, a);
+    if (inp && inp.formula !== undefined && !this.live(inp.formula, raw)) return { inp: { value: "=" + inp.formula }, v: "=" + inp.formula, raw: raw };
+    return { inp: inp, v: this.value(tabName, a), raw: raw };
+  };
   // A rule's formula is written for the top-left cell of its range; dr/dc move it to another cell.
   Book.prototype.ruleAt = function (formula, tabName, dr, dc) {
     if (++this.steps > LIMIT.steps) return false;
@@ -466,7 +493,7 @@ var SheetEngine = (function () {
   }
 
   // --- formats ---
-  var SYM = { GBP: "£", USD: "$", EUR: "€" };
+  var SYM = map({ GBP: "£", USD: "$", EUR: "€" });
   function fmtValue(v, fmt, data) {
     if (isErr(v)) return v.e;
     if (v === null || v === undefined) return "";
@@ -487,7 +514,7 @@ var SheetEngine = (function () {
   }
   function excelFmt(fmt, data) {
     var sym = SYM[data.currency || "GBP"] || "";
-    return { money: '"' + sym + '"#,##0', money2: '"' + sym + '"#,##0.00', int: "#,##0", num: "#,##0.00", pct: "0%", pct1: "0.0%", date: "d mmm yyyy", month: "mmm yyyy" }[fmt] || null;
+    return map({ money: '"' + sym + '"#,##0', money2: '"' + sym + '"#,##0.00', int: "#,##0", num: "#,##0.00", pct: "0%", pct1: "0.0%", date: "d mmm yyyy", month: "mmm yyyy" })[fmt] || null;
   }
   function cellFmt(tab, a, c, inp) { // the cell's own fmt; else a date shows as a date; else its column's
     if (c && c.fmt) return c.fmt; var p = parseAddr(a); var col = (tab.cols || [])[p ? p.c - 1 : -1], f = (col && col.fmt) || null;
@@ -525,17 +552,17 @@ var SheetEngine = (function () {
   function xlFormula(f) { // prefix the newer functions as Excel stores them
     return f.replace(/(^|[^A-Za-z0-9_.])([A-Za-z]+)\(/g, function (m, pre, name) { return pre + (XLFN.indexOf(name.toUpperCase()) >= 0 ? "_xlfn." : "") + name.toUpperCase() + "("; });
   }
-  var FILLS = { bad: "FFFDE2E1", warn: "FFFFF1C2", good: "FFDCF3E6" };
+  var FILLS = map({ bad: "FFFDE2E1", warn: "FFFFF1C2", good: "FFDCF3E6" });
   var RISKY = /^[=+\-@\t\r]/; // text a spreadsheet app could read as a formula
   function xlsx(book) {
     var data = book.data, NS = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"';
-    var numFmts = [], styles = [{ fmt: 0, bold: false, quote: false }], styleKey = { "0|0|0": 0 };
+    var numFmts = [], styles = [{ fmt: 0, bold: false, quote: false }], styleKey = map({ "0|0|0": 0 });
     function styleFor(fmt, bold, quote) { // quote: Excel's leading apostrophe, so text stays text when edited
       var code = fmt ? excelFmt(fmt, data) : null, id = 0;
       if (code) { var i = numFmts.indexOf(code); if (i < 0) { numFmts.push(code); i = numFmts.length - 1; } id = 164 + i; }
       var k = id + "|" + (bold ? 1 : 0) + "|" + (quote ? 1 : 0); if (!(k in styleKey)) { styleKey[k] = styles.length; styles.push({ fmt: id, bold: bold, quote: !!quote }); } return styleKey[k];
     }
-    var dxfs = [], dxfKey = {};
+    var dxfs = [], dxfKey = map();
     function dxfFor(style) { if (!(style in dxfKey)) { dxfKey[style] = dxfs.length; dxfs.push(style); } return dxfKey[style]; }
     var sheets = book.order.map(function (name) {
       var tab = book.tabs[name.toLowerCase()], raw = book.raw[name.toLowerCase()], rows = {};
@@ -543,9 +570,7 @@ var SheetEngine = (function () {
       var freeze = tab.freeze || 0, out = [];
       Object.keys(rows).map(Number).sort(function (p, q) { return p - q; }).forEach(function (r) {
         var cells = rows[r].sort(function (p, q) { return p.c - q.c; }).map(function (it) {
-          var c = raw[it.a], inp = book.input(name, it.a), v = book.value(name, it.a);
-          var asText = inp && inp.formula !== undefined && !book.live(inp.formula, c);
-          if (asText) { inp = { value: "=" + inp.formula }; v = inp.value; }
+          var c = raw[it.a], ex = book.exported(name, it.a), inp = ex.inp, v = ex.v;
           var s = styleFor(cellFmt(tab, it.a, c, inp), !!(c.b || (freeze && r <= freeze && (inp.date || (!inp.formula && typeof v === "string")))), typeof v === "string" && RISKY.test(v));
           var sAttr = s ? ' s="' + s + '"' : "";
           if (inp && inp.formula !== undefined) {
@@ -584,8 +609,17 @@ var SheetEngine = (function () {
     return zip(files);
   }
   function csv(book, tabName) {
-    var sz = book.size(tabName), lines = [];
-    for (var r = 1; r <= sz.rows; r++) { var row = []; for (var c = 1; c <= sz.cols; c++) { var v = book.value(tabName, addr(r, c)), inp = book.input(tabName, addr(r, c)), tab = book.tabs[tabName.toLowerCase()], f = cellFmt(tab, addr(r, c), (book.raw[tabName.toLowerCase()] || {})[addr(r, c)], inp); var s = isErr(v) ? v.e : v === null ? "" : (typeof v === "number" && (f === "date" || f === "month")) ? (function (d) { return d.y + "-" + ("0" + d.m).slice(-2) + "-" + ("0" + d.d).slice(-2); })(fromSerial(v)) : str(v); if (typeof v === "string" && RISKY.test(s)) s = "'" + s; row.push(/[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s); } lines.push(row.join(",")); }
+    var sz = book.size(tabName), tab = book.tabs[String(tabName).toLowerCase()], lines = [];
+    for (var r = 1; r <= sz.rows; r++) {
+      var row = [];
+      for (var c = 1; c <= sz.cols; c++) {
+        var a = addr(r, c), ex = book.exported(tabName, a), v = ex.v, f = cellFmt(tab, a, ex.raw, ex.inp);
+        var s = isErr(v) ? v.e : v === null ? "" : (typeof v === "number" && (f === "date" || f === "month")) ? (function (d) { return d.y + "-" + ("0" + d.m).slice(-2) + "-" + ("0" + d.d).slice(-2); })(fromSerial(v)) : str(v);
+        if (typeof v === "string" && RISKY.test(s)) s = "'" + s; // text an app could read as a formula; numbers stay numbers
+        row.push(/[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s);
+      }
+      lines.push(row.join(","));
+    }
     return lines.join("\r\n") + "\r\n";
   }
   // Every error cell in the book, for the status line and the agent's own check.
@@ -626,7 +660,22 @@ var SheetEngine = (function () {
     });
     return out;
   }
-  return { Book: Book, parse: parse, fmtValue: fmtValue, cellFmt: cellFmt, xlsx: xlsx, csv: csv, report: report, expand: expand, parseAddr: parseAddr, addr: addr, colName: colName, isErr: isErr, serial: serial, NAMES: NAMES, applyDelta: applyDelta, BATCH: BATCH, LIMIT: LIMIT, isCell: isCell, drawSize: drawSize, cleanEdits: cleanEdits };
+  // Everyone's records as one overlay, {tab: {B4: {v, at, t, by, peer}}}: only tabs the sheet has, the newest edit
+  // to a cell winning, and none older than the sheet's own change to it (stampOf(tab, a) gives that time).
+  function mergeEdits(recs, tabs, stampOf) {
+    var names = map(), all = map();
+    (tabs || []).forEach(function (t) { names[String(t.name).toLowerCase()] = true; });
+    (recs || []).forEach(function (rec) {
+      if (!rec || typeof rec !== "object") return;
+      cleanEdits(rec.data && rec.data.edits).forEach(function (e) {
+        if (!names[e.tab] || e.t <= stampOf(e.tab, e.a)) return;
+        var m = all[e.tab] || (all[e.tab] = map()), prev = m[e.a];
+        if (!prev || prev.t < e.t) m[e.a] = { v: e.v, at: e.at, t: e.t, peer: !rec.mine, by: rec.mine ? "You" : String(rec.author_name || rec.author_email || "Someone") };
+      });
+    });
+    return all;
+  }
+  return { Book: Book, parse: parse, fmtValue: fmtValue, cellFmt: cellFmt, xlsx: xlsx, csv: csv, report: report, expand: expand, parseAddr: parseAddr, addr: addr, colName: colName, isErr: isErr, serial: serial, NAMES: NAMES, applyDelta: applyDelta, BATCH: BATCH, LIMIT: LIMIT, isCell: isCell, drawSize: drawSize, cleanEdits: cleanEdits, mergeEdits: mergeEdits, map: map };
 })();
 if (typeof module !== "undefined") module.exports = SheetEngine;
 </script>
@@ -639,10 +688,10 @@ if (typeof module !== "undefined") module.exports = SheetEngine;
   var E = SheetEngine, data;
   try { data = JSON.parse(document.getElementById("sheet-data").textContent); } catch (e) { document.getElementById("status").textContent = "The sheet's data isn't valid JSON: " + e.message; document.getElementById("status").className = "status err"; return; }
   var m = location.pathname.match(/^\/s\/[^/]+/), API = (m ? m[0] : "") + "/api", COL = "cells";
-  var state = { tab: 0, sel: "A1", showF: false, loaded: false, signedIn: false, me: null, mine: {}, others: [], since: null, poll: 15000 };
+  var state = { tab: 0, sel: "A1", showF: false, loaded: false, signedIn: false, me: null, mine: E.map(), others: [], since: null, poll: 15000 };
   var savedAt = Date.parse(data.saved_at || 0) || 0;
   // A cell the agent changed at time T keeps the agent's value over any person's edit made before T.
-  var stamps = {};
+  var stamps = E.map();
   Object.keys(data.edited || {}).forEach(function (k) {
     var t = Date.parse(data.edited[k]) || 0, bang = k.lastIndexOf("!");
     var tab = (bang < 0 ? k : k.slice(0, bang)).toLowerCase(), rng = bang < 0 ? null : k.slice(bang + 1);
@@ -650,18 +699,7 @@ if (typeof module !== "undefined") module.exports = SheetEngine;
     E.expand(rng).forEach(function (p) { var key = tab + "!" + E.addr(p.r, p.c); stamps[key] = Math.max(stamps[key] || 0, t); });
   });
   function stampOf(tab, a) { return Math.max(stamps[tab + "!" + a] || 0, stamps[tab + "!*"] || 0); }
-  function overlay() {
-    var all = {}, recs = state.others.concat(state.me ? [{ data: { edits: state.mine }, author_name: "You", mine: true }] : []);
-    recs.forEach(function (rec) {
-      E.cleanEdits(rec.data && rec.data.edits).forEach(function (e) {
-        if (e.t <= stampOf(e.tab, e.a)) return;
-        all[e.tab] = all[e.tab] || {};
-        var prev = all[e.tab][e.a];
-        if (!prev || prev.t < e.t) all[e.tab][e.a] = { v: e.v, at: e.at, t: e.t, peer: !rec.mine, by: rec.mine ? "You" : (rec.author_name || rec.author_email || "Someone") };
-      });
-    });
-    return all;
-  }
+  function overlay() { return E.mergeEdits(state.others.concat(state.me ? [{ data: { edits: state.mine }, mine: true }] : []), data.tabs, stampOf); }
   var book;
   function rebuild() { book = new E.Book(data, overlay()); }
   function tabObj() { return data.tabs[state.tab]; }
@@ -669,7 +707,7 @@ if (typeof module !== "undefined") module.exports = SheetEngine;
   function slug(s) { return String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "tab"; }
   var lookups = null; // per render: which cells are drop-downs, checkboxes and highlighted
   function buildLookups(tab) {
-    var L = { list: {}, check: {}, rule: {} };
+    var L = { list: E.map(), check: E.map(), rule: E.map() };
     (tab.lists || []).forEach(function (l) { E.expand(l.range).forEach(function (q) { L.list[E.addr(q.r, q.c)] = l; }); });
     (tab.checks || []).forEach(function (rg) { E.expand(rg).forEach(function (q) { L.check[E.addr(q.r, q.c)] = true; }); });
     (tab.rules || []).forEach(function (rule) { var cells = E.expand(rule.range); if (!cells.length) return; var top = cells[0]; cells.forEach(function (q) { var a = E.addr(q.r, q.c); if (!L.rule[a] && book.ruleAt(rule.if, tab.name, q.r - top.r, q.c - top.c)) L.rule[a] = rule.style || "bad"; }); });
@@ -837,7 +875,7 @@ if (typeof module !== "undefined") module.exports = SheetEngine;
         state.loaded = true; state.signedIn = true; state.me = true; state.failed = false; state.tries = 0;
         state.others = (j.records || []).filter(function (x) { return !x.mine; });
         var mine = (j.records || []).filter(function (x) { return x.mine; })[0];
-        if (mine && mine.data && mine.data.edits && typeof mine.data.edits === "object" && !Array.isArray(mine.data.edits)) state.mine = mine.data.edits;
+        if (mine && mine.data && mine.data.edits && typeof mine.data.edits === "object" && !Array.isArray(mine.data.edits)) state.mine = E.map(mine.data.edits);
         (j.records || []).forEach(function (x) { if (!state.since || x.updated_at > state.since) state.since = x.updated_at; });
         render(); setTimeout(poll, state.poll);
       });
@@ -874,7 +912,7 @@ if (typeof module !== "undefined") module.exports = SheetEngine;
   fx.addEventListener("change", function () { var inp = book.input(tabObj().name, state.sel), cur = !inp ? "" : inp.formula !== undefined ? "=" + inp.formula : inp.value === null ? "" : String(inp.value); if (fx.value !== cur) write(state.sel, fx.value); });
   document.addEventListener("keydown", function (e) {
     if (document.activeElement === fx || /INPUT|SELECT|TEXTAREA/.test((document.activeElement || {}).tagName || "")) return;
-    var mv = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] }[e.key];
+    var mv = E.map({ ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] })[e.key];
     if (mv) { e.preventDefault(); move(mv[0], mv[1]); }
     else if (e.key === "Enter" || e.key === "F2") { e.preventDefault(); fx.focus(); }
   });

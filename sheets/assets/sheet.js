@@ -64,7 +64,7 @@ function frame(sheet) { const s = JSON.parse(JSON.stringify(sheet)); delete s.sa
 function batches(sent, now) {
   const out = [];
   for (const t of now.tabs || []) {
-    const was = ((sent.tabs || []).find((x) => x.name === t.name) || {}).cells || {}, is = t.cells || {}, diff = {};
+    const was = ((sent.tabs || []).find((x) => x.name === t.name) || {}).cells || {}, is = t.cells || {}, diff = Object.create(null);
     for (const a of Object.keys(is)) if (JSON.stringify(is[a]) !== JSON.stringify(was[a])) diff[a] = is[a];
     for (const a of Object.keys(was)) if (!(a in is)) diff[a] = null;
     const keys = Object.keys(diff);
@@ -84,12 +84,15 @@ function shiftFormula(f, dr, dc) {
     return c$ + (c$ ? col : colName(colNum(col) + dc)) + r$ + (r$ ? row : String(+row + dr));
   });
 }
+// Every key is checked by the page's own validator before anything is expanded: a cell, or a range whose two
+// corners are cells on the sheet.
 function fill(cells, where) {
-  const out = {};
+  const E = eng(), out = Object.create(null), last = E.colName(E.LIMIT.cols) + E.LIMIT.rows;
   for (const [k, v] of Object.entries(cells || {})) {
-    const m = /^([A-Z]{1,3})(\d+):([A-Z]{1,3})(\d+)$/.exec(k);
+    const m = /^([A-Z]{1,3}\d+):([A-Z]{1,3}\d+)$/.exec(k);
+    for (const a of m ? [m[1], m[2]] : [k]) if (!E.isCell(a)) throw new Error(`${where}: ${k} is off the sheet or isn't an address: a tab runs from A1 to ${last}, and an address is written like B4`);
     if (!m) { out[k] = v; continue; }
-    const c0 = colNum(m[1]), r0 = +m[2], c1 = colNum(m[3]), r1 = +m[4];
+    const p = E.parseAddr(m[1]), q = E.parseAddr(m[2]), c0 = p.c, r0 = p.r, c1 = q.c, r1 = q.r;
     if ((c0 !== c1 && r0 !== r1) || c1 < c0 || r1 < r0) throw new Error(`${where}: ${k} must be one column or one row, top to bottom or left to right`);
     for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
       const f = (x) => (typeof x === "string" && x.startsWith("=") ? shiftFormula(x, r - r0, c - c0) : x);
@@ -98,6 +101,8 @@ function fill(cells, where) {
   }
   return out;
 }
+let ENGINE = null;
+const eng = () => ENGINE || (ENGINE = engine());
 // data.json, then each cells/*.json in name order on top.
 function assemble(dir) {
   const read = (f) => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch (e) { throw new Error(`${path.relative(dir, f)}: ${e.code === "ENOENT" ? "missing" : "not valid JSON: " + e.message}`); } };
@@ -112,13 +117,12 @@ function assemble(dir) {
     if (!tab) throw new Error(`cells/${f}: no tab named ${JSON.stringify(b.tab)} in data.json`);
     if (!b.cells || typeof b.cells !== "object") throw new Error(`cells/${f}: it needs "cells"`);
     const cells = fill(b.cells, `cells/${f}`);
-    tab.cells = Object.assign(tab.cells || {}, cells);
+    tab.cells = Object.assign(tab.cells || Object.create(null), cells);
     for (const a of Object.keys(cells)) if (cells[a] === null) delete tab.cells[a];
   }
-  // The page's own check: a cell it wouldn't keep is refused here, before anything is sent.
-  const E = engine(), last = E.colName(E.LIMIT.cols) + E.LIMIT.rows;
+  // Every cell went through fill's check; the drop-downs, ticks, highlights and charts' ranges get the page's too.
+  const E = eng(), last = E.colName(E.LIMIT.cols) + E.LIMIT.rows;
   for (const t of sheet.tabs) {
-    for (const a of Object.keys(t.cells)) if (!E.isCell(a)) throw new Error(`${t.name}!${a} isn't a cell on the sheet: a tab runs from A1 to ${last}, and an address is written like B4`);
     const ranges = [...(t.lists || []).map((l) => l.range), ...(t.checks || []), ...(t.rules || []).map((x) => x.range), ...(t.charts || []).flatMap((c) => [c.labels, ...(c.series || []).map((x) => x.range)])];
     for (const rg of ranges) if (rg !== undefined && !E.expand(rg).length) throw new Error(`${t.name}: the range ${rg} runs off the sheet: a tab runs from A1 to ${last}`);
   }
@@ -249,16 +253,12 @@ function pushSheet(sheet, say) {
     // A page and a status can't go in one call (the API takes one or the other); a batch and a status can.
     try { const a = live({ html: page }); console.log(`pushed the whole page (${page.length} bytes${seen(a)}, ${took()})`); }
     catch (e) { console.error(`page push refused: ${why(e)}. Nothing is marked sent: push again`); return false; }
-    if (say) status(say);
-    if (!fs.existsSync(pubFile)) {
-      try { publish(sheet, say || "The sheet's tabs and headers"); console.log(`saved it, so a later visitor sees it too (${took()})`); }
-      catch (e) { console.error(`save refused: ${why(e)}`); }
-    }
     fs.writeFileSync(sentFile, JSON.stringify(sheet));
-    return true;
+    if (say) status(say);
+    return firstSave(sheet, say);
   }
   const bs = batches(sent, sheet);
-  if (!bs.length) { if (say) status(say); console.log("no cell changed since the last push"); return true; }
+  if (!bs.length) { if (say) status(say); console.log("no cell changed since the last push"); return firstSave(sheet, say); }
   let done = 0, last = {};
   for (const [i, b] of bs.entries()) {
     const line = bs.length > 1 ? `${say || "Writing cells"} (${i + 1} of ${bs.length})` : say;
@@ -269,7 +269,14 @@ function pushSheet(sheet, say) {
     fs.writeFileSync(sentFile, JSON.stringify(was));
   }
   console.log(`pushed ${done} cell${done === 1 ? "" : "s"} in ${bs.length} batch${bs.length === 1 ? "" : "es"}${seen(last)} (${took()})`);
-  return true;
+  return firstSave(sheet, say);
+}
+// What's pushed (sent.json) and whether it's saved (published) are kept apart. Until the sheet has been saved once,
+// every push tries the save again, so a later visitor sees it, and fails while it can't.
+function firstSave(sheet, say) {
+  if (fs.existsSync(pubFile)) return true;
+  try { publish(sheet, say || "The sheet's tabs and headers"); console.log(`saved it, so a later visitor sees it too (${took()})`); return true; }
+  catch (e) { console.error(`save refused: ${why(e)}. Open tabs have it, but it isn't saved yet: push again`); return false; }
 }
 
 if (cmd === "push") {

