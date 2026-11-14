@@ -81,20 +81,23 @@ thing instead.
    only when the ask is too vague to build anything useful and the person can answer
    while you wait; with no way to answer (a run nobody watches), guess. Use the person's
    own rows, numbers and names when they give them.
-3. **Push the frame, formatted, within 30 seconds of the start.** Decide only the layout:
-   which tabs, which columns, where each table starts, each column's width and format. Don't
-   work out rows, amounts or formulas yet. Give each thing people update its own tab (one
-   per team, one list of tasks), and put what people only read on its own tab ("Summary",
-   "By month"). Inputs on the left, calculated columns on the right, one header row,
-   frozen. Tab names are short and plain, at most 31 characters, with none of
+3. **Push the frame, formatted, within 30 seconds of the start: tab names, headers and
+   formats only.** Decide only the layout: which tabs, which columns, where each table
+   starts, each column's width and format. No rows, no amounts, no formulas, and don't open
+   `references/functions.md` yet: that comes after this push. Give each thing people update
+   its own tab (one per team, one list of tasks), and put what people only read on its own
+   tab ("Summary", "By month"). **List the summary tab first,** so the sheet opens on it,
+   then the tabs people update. Inputs on the left, calculated columns on the right, one
+   header row, frozen. Tab names are short and plain, at most 31 characters, with none of
    `[ ] : * ? / \`. Moving a table after this push sends the whole page again.
    Write `data.json` and push it in one command: `title`, `lede` (one or two sentences:
    what the sheet holds, who updates it, that the figures are examples), `description`,
    `currency`, `locale`, and each tab's `name`, `freeze: 1`, `cols` (widths and formats),
    header cells, `lists` and `checks`. Then `sheet.js push "Writing <the first tab>"`.
-   Headers that are dates carry their format, so they never show as numbers:
-   `"D1": {"v": "2026-09-01", "fmt": "month"}, "E1:F1": {"v": "=EDATE(D1,1)", "fmt": "month"}`.
-4. **Then one tab at a time, inputs first, summaries last.** Work out only this tab's
+   Headers that are dates are typed dates with their format, so they never show as
+   numbers: `"B1": {"v": "2026-01-01", "fmt": "month"}, "C1": {"v": "2026-02-01", "fmt": "month"}`.
+4. **Then one tab at a time: the tabs people update first, the summary last,** though it
+   stays first in the list. Work out only this tab's
    rows, write them as one batch, and push it in the same command. The status says what
    landed and what you write next: `sheet.js push "Budget: 14 lines in. Writing
    Transactions next"`. Keep each step under 45 seconds: a tab with many rows goes in two
@@ -287,7 +290,8 @@ changed and point to "What changed in this version". Never paste the JSON, and s
 - `references/sheet-format.md`: the JSON, field by field, with a full small example. Read
   it with `start`, before the first push.
 - `references/functions.md`: every function the engine knows, with notes on Excel
-  differences. Read it before you write formulas you haven't used here.
+  differences. Read it after the first push, before you write formulas you haven't used
+  here.
 - `references/examples.md`: three worked cases: a sheet from one ask, a change with its
   record, and a cleaned import with a tracker. Read it for a change or an import; for a
   new sheet the steps above are enough.

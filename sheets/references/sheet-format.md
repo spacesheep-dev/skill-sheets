@@ -74,8 +74,8 @@ Leave empty cells out of `cells`.
 
 With no format, numbers show as they are. Formats apply only to numbers, so a header row
 of words in a `money` column is fine. A date, or a formula that gives one (`DATE`, `EDATE`,
-`EOMONTH`, `TODAY`), shows as `date` unless the cell itself says otherwise. For month
-headers give the cell `"fmt": "month"`: `"E1:F1": {"v": "=EDATE(D1,1)", "fmt": "month"}`.
+`EOMONTH`, `TODAY`), shows as `date` unless the cell itself says otherwise. Month headers
+are typed dates with `"fmt": "month"`: `"B1": {"v": "2026-01-01", "fmt": "month"}`.
 
 ## Highlight styles
 
@@ -90,7 +90,7 @@ computed values. Charts appear under the grid of their own tab. They are not in 
 
 ## A full small example
 
-An office-move budget with a quote list and a summary.
+An office-move budget with a summary, listed first, and a quote list.
 
 ```json
 {
@@ -100,6 +100,19 @@ An office-move budget with a quote list and a summary.
   "saved_at": "2026-11-12T09:30:00Z",
   "edited": {},
   "tabs": [
+    {
+      "name": "Summary",
+      "freeze": 1,
+      "cols": [{"w": 160}, {"w": 120, "fmt": "money"}],
+      "cells": {
+        "A1": "Measure", "B1": "Amount",
+        "A2": "Quoted", "B2": "=SUM(Costs!C2:C200)",
+        "A3": "Paid", "B3": "=SUM(Costs!D2:D200)",
+        "A4": "Still to pay", "B4": "=B2-B3",
+        "A5": "Items not booked", "B5": {"v": "=COUNTIF(Costs!E2:E200,\"planned\")", "fmt": "int"}
+      },
+      "lists": [], "checks": [], "rules": [], "charts": []
+    },
     {
       "name": "Costs",
       "freeze": 1,
@@ -114,19 +127,6 @@ An office-move budget with a quote list and a summary.
       "checks": [],
       "rules": [{"range": "A2:F200", "if": "=AND($F2<>\"\",$F2<TODAY(),$E2<>\"paid\")", "style": "bad"}],
       "charts": []
-    },
-    {
-      "name": "Summary",
-      "freeze": 1,
-      "cols": [{"w": 160}, {"w": 120, "fmt": "money"}],
-      "cells": {
-        "A1": "Measure", "B1": "Amount",
-        "A2": "Quoted", "B2": "=SUM(Costs!C2:C200)",
-        "A3": "Paid", "B3": "=SUM(Costs!D2:D200)",
-        "A4": "Still to pay", "B4": "=B2-B3",
-        "A5": "Items not booked", "B5": {"v": "=COUNTIF(Costs!E2:E200,\"planned\")", "fmt": "int"}
-      },
-      "lists": [], "checks": [], "rules": [], "charts": []
     }
   ]
 }
