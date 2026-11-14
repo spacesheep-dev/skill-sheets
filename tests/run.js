@@ -16,12 +16,11 @@ function script(id) {
   if (!m) throw new Error(`no <script id="${id}"> in the starter`);
   return m[1];
 }
-function engine() {
-  const box = { module: {}, TextEncoder, Intl, Date, Math, JSON };
-  vm.runInNewContext(script("sheet-engine"), box);
-  return box.module.exports;
-}
-const E = engine();
+const ctx = vm.createContext({ module: {}, TextEncoder, Intl, Date, Math, JSON });
+vm.runInContext(script("sheet-engine"), ctx);
+const E = ctx.module.exports;
+// Runs fn and stops it after ms: a test of something that used to hang fails instead of hanging the run.
+function within(ms, fn) { ctx.__fn = fn; try { return vm.runInContext("__fn()", ctx, { timeout: ms }); } finally { delete ctx.__fn; } }
 
 let failed = 0, passed = 0;
 function test(name, fn) {
@@ -90,6 +89,7 @@ test("the page's scripts never write HTML or run text as code", () => {
 });
 
 if (fs.existsSync(path.join(__dirname, "live.js"))) require("./live.js")({ E, test, script, PAGE, ROOT });
+require("./hostile.js")({ E, test, script, within, ROOT });
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

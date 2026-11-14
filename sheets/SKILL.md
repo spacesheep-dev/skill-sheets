@@ -70,7 +70,8 @@ thing instead.
   sheet to Airtable, Asana or similar tools.
 - Comments on a range: a comment pins to one cell.
 - Edits appear for others within about 15 seconds, not instantly.
-- Size: the page draws every row, so keep a tab under about 5,000 rows. Each person can
+- Size: the page draws every row, so keep a tab under about 5,000 rows. A tab ends at row
+  10,000 and column ALL; `sheet.js` refuses cells past that. Each person can
   keep about 32 KB of edits (a few hundred cells). For bigger data use the data skill.
 - Sharing: you can't share the space or invite anyone. The person does it from Share.
 

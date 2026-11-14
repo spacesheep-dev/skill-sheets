@@ -115,6 +115,13 @@ function assemble(dir) {
     tab.cells = Object.assign(tab.cells || {}, cells);
     for (const a of Object.keys(cells)) if (cells[a] === null) delete tab.cells[a];
   }
+  // The page's own check: a cell it wouldn't keep is refused here, before anything is sent.
+  const E = engine(), last = E.colName(E.LIMIT.cols) + E.LIMIT.rows;
+  for (const t of sheet.tabs) {
+    for (const a of Object.keys(t.cells)) if (!E.isCell(a)) throw new Error(`${t.name}!${a} isn't a cell on the sheet: a tab runs from A1 to ${last}, and an address is written like B4`);
+    const ranges = [...(t.lists || []).map((l) => l.range), ...(t.checks || []), ...(t.rules || []).map((x) => x.range), ...(t.charts || []).flatMap((c) => [c.labels, ...(c.series || []).map((x) => x.range)])];
+    for (const rg of ranges) if (rg !== undefined && !E.expand(rg).length) throw new Error(`${t.name}: the range ${rg} runs off the sheet: a tab runs from A1 to ${last}`);
+  }
   return sheet;
 }
 // What check finds: error cells, unknown functions, and formulas that all come to zero (a whole column of 3 or
@@ -241,7 +248,7 @@ function pushSheet(sheet, say) {
     const page = buildPage(fs.readFileSync(STARTER, "utf8"), sheet);
     // A page and a status can't go in one call (the API takes one or the other); a batch and a status can.
     try { const a = live({ html: page }); console.log(`pushed the whole page (${page.length} bytes${seen(a)}, ${took()})`); }
-    catch (e) { console.error(`page push refused: ${why(e)}`); }
+    catch (e) { console.error(`page push refused: ${why(e)}. Nothing is marked sent: push again`); return false; }
     if (say) status(say);
     if (!fs.existsSync(pubFile)) {
       try { publish(sheet, say || "The sheet's tabs and headers"); console.log(`saved it, so a later visitor sees it too (${took()})`); }
@@ -280,7 +287,9 @@ if (cmd === "save") {
   try { sheet = assemble(DIR); } catch (e) { die(`save: ${e.message}`, 1); }
   try { publish(sheet, message); } catch (e) { die(`save refused: ${why(e)}`, 1); }
   console.log(`saved: ${message} (${took()})`);
-  pushSheet(sheet, say); // open tabs get what changed since the last push: highlights, charts, last cells
+  // Open tabs get what changed since the last push: highlights, charts, last cells. If that fails, the version
+  // is saved but people watching don't see it yet: say so, and fail, so push is run again.
+  if (!pushSheet(sheet, say)) die("saved, but open tabs didn't get the last changes: run push", 1);
   process.exit(0);
 }
 
