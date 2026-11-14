@@ -55,6 +55,7 @@ table.grid{border-collapse:separate;border-spacing:0;font-variant-numeric:tabula
 .grid td.sel{outline:2px solid var(--sel);outline-offset:-2px}
 .grid td.chg{box-shadow:inset 0 0 0 2px var(--chg)}
 .grid td.peer{box-shadow:inset 3px 0 0 var(--mine)}
+.grid td.under{outline:2px dashed var(--chg);outline-offset:-3px}
 .grid td.bad{background:var(--bad);color:var(--bad-ink)}
 .grid td.warn{background:var(--warn);color:var(--warn-ink)}
 .grid td.good{background:var(--good);color:var(--good-ink)}
@@ -772,7 +773,7 @@ self.onmessage = function (e) {
   var E = SheetEngine, data;
   try { data = JSON.parse(document.getElementById("sheet-data").textContent); } catch (e) { document.getElementById("status").textContent = "The sheet's data isn't valid JSON: " + e.message; document.getElementById("status").className = "status err"; return; }
   var m = location.pathname.match(/^\/s\/[^/]+/), BASE = m ? m[0] : "", API = BASE + "/api", COL = "cells";
-  var state = { ver: 0, tab: 0, sel: "A1", showF: false, loaded: false, signedIn: false, me: null, mine: E.map(), others: [], since: null, poll: 15000 };
+  var state = { ver: 0, draft: null, tab: 0, sel: "A1", showF: false, loaded: false, signedIn: false, me: null, mine: E.map(), others: [], since: null, poll: 15000 };
   var savedAt = Date.parse(data.saved_at || 0) || 0;
   // A cell the agent changed at time T keeps the agent's value over any person's edit made before T.
   var stamps = E.map();
@@ -873,7 +874,7 @@ self.onmessage = function (e) {
   function ruleClass(tab, a) { return lookups.rule[a] || null; }
   function renderTabs() {
     var nav = document.getElementById("tabs"); nav.textContent = "";
-    data.tabs.forEach(function (t, i) { var b = el("button", { type: "button", role: "tab", "aria-selected": String(i === state.tab) }, t.name); b.onclick = function () { state.tab = i; state.sel = "A1"; render(); }; nav.appendChild(b); });
+    data.tabs.forEach(function (t, i) { var b = el("button", { type: "button", role: "tab", "aria-selected": String(i === state.tab) }, t.name); b.onclick = function () { state.tab = i; state.sel = "A1"; try { history.replaceState(null, "", "#tab=" + encodeURIComponent(t.name)); } catch (e) {} render(); keepPlace(); }; nav.appendChild(b); });
   }
   function render() {
     rebuild(); renderTabs();
@@ -898,6 +899,7 @@ self.onmessage = function (e) {
         var st = stampOf(tname, a); if (st && st === latest && st >= savedAt - 1000 && savedAt) cls.push("chg");
         if (raw && raw.by && raw.by !== "You") { cls.push("peer"); td.title = "Edited by " + raw.by; }
         if (state.sel === a) cls.push("sel");
+        if (state.draft && state.draft.under && state.draft.cell === a && state.draft.tab === tab.name) { cls.push("under"); td.title = "Changed while you were typing: Enter keeps yours, Esc takes the new value"; }
         td.className = cls.join(" ");
         var list = inList(tab, a);
         if (isCheck(tab, a)) {
@@ -938,13 +940,16 @@ self.onmessage = function (e) {
     state.sel = a;
     document.querySelectorAll("#grid td.sel").forEach(function (n) { n.classList.remove("sel"); });
     var td = document.querySelector('#grid td[data-cell="' + a + '"]'); if (td) td.classList.add("sel");
-    renderBar();
+    renderBar(); keepPlace();
   }
+  // What a person is typing is theirs: no redraw writes over it, and it outlasts a rewrite or a reload.
+  function drafting() { var d = state.draft; return d && d.tab === tabObj().name && d.cell === state.sel ? d : null; }
   function renderBar() {
-    var tab = tabObj(), inp = book.input(tab.name, state.sel), fx = document.getElementById("fx");
+    var tab = tabObj(), inp = book.input(tab.name, state.sel), fx = document.getElementById("fx"), d = drafting();
     document.getElementById("addr").textContent = tab.name + "!" + state.sel;
-    fx.value = !inp ? "" : inp.formula !== undefined ? "=" + inp.formula : inp.value === null ? "" : (inp.date ? book.raw[tab.name.toLowerCase()][state.sel].v : String(inp.value));
+    fx.value = d ? d.text : !inp ? "" : inp.formula !== undefined ? "=" + inp.formula : inp.value === null ? "" : (inp.date ? book.raw[tab.name.toLowerCase()][state.sel].v : String(inp.value));
     fx.disabled = !state.loaded || !state.signedIn;
+    if (state.refocus && d && !fx.disabled) { state.refocus = false; fx.focus(); } // back to the half-typed text after a reload
   }
   function renderLegend() {
     var lg = document.getElementById("legend"); lg.textContent = "";
@@ -959,6 +964,7 @@ self.onmessage = function (e) {
     if (calc.late) who = "Some cells took over 2 s to work out, so they show #CALC!. " + who;
     if (calc.here) who = "This page can't start a worker, so the sheet is worked out here, with a smaller limit. " + who;
     if (state.cut) who = "Only the first " + state.cut + " rows are drawn and downloaded; " + state.out + " more are left out. " + who;
+    if (state.draft && state.draft.under) who = "The cell you're typing in changed: Enter keeps yours, Esc takes the new value. " + who;
     if (rep.errors.length) { st.textContent = "⚠ " + rep.errors.length + " cell" + (rep.errors.length > 1 ? "s show" : " shows") + " an error: " + rep.errors.slice(0, 5).join(", ") + ". " + who; st.className = "status err"; }
     else { st.textContent = "No error cells. " + who; st.className = "status"; }
   }
@@ -996,7 +1002,7 @@ self.onmessage = function (e) {
     if (!state.loaded || !state.signedIn) return;
     var tab = tabObj(), key = tab.name + "!" + a, v = value;
     if (typeof v === "string") { var s = v.trim(); if (s !== "" && s.charAt(0) !== "=" && !isNaN(Number(s.replace(/,/g, ""))) && !/^0\d/.test(s)) v = Number(s.replace(/,/g, "")); else if (/^(true|false)$/i.test(s)) v = /^true$/i.test(s); }
-    state.mine[key] = { v: v, at: new Date().toISOString() }; state.ver++;
+    state.mine[key] = { v: v, at: new Date().toISOString() }; state.ver++; state.draft = null;
     render(); select(a);
     fetch(API + "/records/" + COL + "/mine", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ data: { edits: state.mine } }) })
       .then(function (r) { if (!r.ok) throw new Error(r.status === 413 ? "Your edits are over the 32 KB a person can keep. Ask the owner to fold them into the sheet." : "Couldn't save (" + r.status + ")."); })
@@ -1045,8 +1051,9 @@ self.onmessage = function (e) {
   var fx = document.getElementById("fx");
   fx.addEventListener("keydown", function (e) {
     if (e.key === "Enter") { e.preventDefault(); write(state.sel, fx.value); move(1, 0); }
-    if (e.key === "Escape") { renderBar(); fx.blur(); }
+    if (e.key === "Escape") { state.draft = null; render(); fx.blur(); keepPlace(); }
   });
+  fx.addEventListener("input", function () { var d = drafting(); state.draft = { tab: tabObj().name, cell: state.sel, text: fx.value, under: !!(d && d.under) }; keepPlace(); });
   fx.addEventListener("change", function () { var inp = book.input(tabObj().name, state.sel), cur = !inp ? "" : inp.formula !== undefined ? "=" + inp.formula : inp.value === null ? "" : String(inp.value); if (fx.value !== cur) write(state.sel, fx.value); });
   document.addEventListener("keydown", function (e) {
     if (document.activeElement === fx || /INPUT|SELECT|TEXTAREA/.test((document.activeElement || {}).tagName || "")) return;
@@ -1059,8 +1066,17 @@ self.onmessage = function (e) {
   var base = slug(data.title || "sheet");
   document.getElementById("dl-csv").onclick = function () { var name = base + "-" + slug(tabObj().name) + ".csv"; makeFile("csv", function (bytes) { download(name, "text/csv", bytes); }); };
   document.getElementById("dl-xlsx").onclick = function () { makeFile("xlsx", function (bytes) { download(base + ".xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", bytes); }); };
+  // The person's place in this browser tab (tab, cell, scroll, typing), kept as it changes and put back at start, so
+  // a whole-page rewrite or a reload doesn't lose it. Where storage is blocked, the page starts fresh as before.
+  var PLACE = "sheet-place:" + location.pathname, placing = false;
+  function keepPlace() {
+    if (placing) return;
+    try { var w = document.getElementById("wrap"); sessionStorage.setItem(PLACE, JSON.stringify({ tab: tabObj().name, sel: state.sel, x: w.scrollLeft, y: w.scrollTop, py: window.scrollY || 0, draft: state.draft })); } catch (e) {}
+  }
+  var place = null; try { place = JSON.parse(sessionStorage.getItem(PLACE) || "null"); } catch (e) {}
+  if (place) data.tabs.forEach(function (t, i) { if (t.name === place.tab) { state.tab = i; state.picked = true; if (E.isCell(place.sel)) state.sel = place.sel; state.draft = place.draft && place.draft.tab === t.name ? place.draft : null; } });
   var want = ""; try { want = decodeURIComponent((location.hash.match(/tab=([^&]+)/) || [])[1] || "").toLowerCase(); } catch (e) { /* a broken link opens the first tab */ }
-  data.tabs.forEach(function (t, i) { if (t.name.toLowerCase() === want) { state.tab = i; state.picked = true; } });
+  data.tabs.forEach(function (t, i) { if (t.name.toLowerCase() === want && i !== state.tab) { state.tab = i; state.picked = true; state.sel = "A1"; } });
   document.getElementById("tabs").addEventListener("click", function () { state.picked = true; });
   // A batch the agent pushes while it builds replaces #sheet-delta, and the page's "ss:live" event names
   // it. It lands outlined, on its own tab unless the person picked one.
@@ -1071,10 +1087,16 @@ self.onmessage = function (e) {
     var now = Date.now(), tn = r.tab.toLowerCase();
     r.cells.forEach(function (a) { stamps[tn + "!" + a] = now; });
     savedAt = now; state.ver++;
-    if (!state.picked) data.tabs.forEach(function (t, i) { if (t.name === r.tab) state.tab = i; });
+    if (state.draft && state.draft.tab === r.tab && r.cells.indexOf(state.draft.cell) >= 0) state.draft.under = true; // theirs stays; the cell is marked
+    if (!state.picked && !state.draft) data.tabs.forEach(function (t, i) { if (t.name === r.tab) state.tab = i; });
     var keep = state.sel; render(); select(keep);
   });
-  render(); load(0);
+  var wrap = document.getElementById("wrap"), pending = false;
+  function keepSoon() { if (!pending) { pending = true; requestAnimationFrame(function () { pending = false; keepPlace(); }); } }
+  wrap.addEventListener("scroll", keepSoon, { passive: true }); addEventListener("scroll", keepSoon, { passive: true }); addEventListener("pagehide", keepPlace);
+  placing = true; render(); select(state.sel);
+  if (place) { wrap.scrollLeft = place.x || 0; wrap.scrollTop = place.y || 0; try { window.scrollTo(0, place.py || 0); } catch (e) {} if (drafting()) { state.refocus = true; renderBar(); } }
+  placing = false; keepPlace(); load(0);
 })();
 </script>
 </body>
