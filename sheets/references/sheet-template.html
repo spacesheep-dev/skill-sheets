@@ -135,6 +135,18 @@ var SheetEngine = (function () {
   function map(o) { var m = Object.create(null); if (o) Object.keys(o).forEach(function (k) { m[k] = o[k]; }); return m; }
   var cur = null; // the book being worked out, so a function can charge its work to that book's budget
   function charge(n) { if (cur && (cur.steps += n) > LIMIT.steps) throw "#CALC!"; }
+  // The one gate for arrays. Every range or array a formula makes comes from mk(): it refuses a shape over LIMIT.cells
+  // before anything is allocated, and charges a step a cell. Each later pass over one (an operation, a sum, a lookup,
+  // a test) charges its cells with pass(). Both end in #CALC!, an error cell, never a frozen page.
+  function room(n) { if (!(n >= 0 && n <= LIMIT.cells)) throw "#CALC!"; charge(n); return n; }
+  function pass(n) { charge(n); return n; }
+  function mk(h, w, f) {
+    room(h * w);
+    var rows = new Array(h);
+    for (var r = 0; r < h; r++) { var row = new Array(w); for (var c = 0; c < w; c++) row[c] = f(r, c); rows[r] = row; }
+    return { range: true, rows: rows };
+  }
+  function cells(v) { return isRange(v) ? v.rows.length * (v.rows[0] || []).length : 1; }
   function colNum(s) { var n = 0; for (var i = 0; i < s.length; i++) n = n * 26 + (s.charCodeAt(i) - 64); return n; }
   function colName(n) { var s = ""; while (n > 0) { var m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
   function inside(p) { return !!p && p.r >= 1 && p.r <= LIMIT.rows && p.c >= 1 && p.c <= LIMIT.cols; }
@@ -225,8 +237,9 @@ var SheetEngine = (function () {
   function text(s) { return s.length > LIMIT.text ? ERR("#VALUE!") : s; } // Excel's longest cell text
   function str(v) { if (v === null || v === undefined) return ""; if (typeof v === "boolean") return v ? "TRUE" : "FALSE"; if (typeof v === "number") return String(Math.round(v * 1e10) / 1e10); return String(v); }
   function bool(v) { if (isErr(v)) return v; if (typeof v === "string") { var u = v.toUpperCase(); if (u === "TRUE") return true; if (u === "FALSE") return false; return ERR("#VALUE!"); } return !!num(v); }
-  function flat(args) { var out = []; args.forEach(function (a) { if (isRange(a)) a.rows.forEach(function (r) { r.forEach(function (c) { out.push({ v: c, fromRange: true }); }); }); else out.push({ v: a, fromRange: false }); }); return out; }
-  function nums(args) { var out = []; var bad = null; flat(args).forEach(function (x) { var v = x.v; if (isErr(v)) { bad = bad || v; return; } if (x.fromRange) { if (typeof v === "number") out.push(v); } else { var n = num(v); if (isErr(n)) bad = bad || n; else out.push(n); } }); return bad || out; }
+  function flat(args) { room(args.reduce(function (n, a) { return n + cells(a); }, 0)); var out = []; args.forEach(function (a) { if (isRange(a)) a.rows.forEach(function (r) { r.forEach(function (c) { out.push({ v: c, fromRange: true }); }); }); else out.push({ v: a, fromRange: false }); }); return out; }
+  function nums(args) { var out = [], bad = null, fl = flat(args); pass(fl.length); fl.forEach(function (x) { var v = x.v; if (isErr(v)) { bad = bad || v; return; } if (x.fromRange) { if (typeof v === "number") out.push(v); } else { var n = num(v); if (isErr(n)) bad = bad || n; else out.push(n); } }); return bad || out; }
+  function passed(list) { pass(list.length); return list; }
   function grid(v) { return isRange(v) ? v.rows : [[v]]; }
 
   // criteria for COUNTIF, SUMIF and the rest
@@ -268,9 +281,12 @@ var SheetEngine = (function () {
     var first = grid(pairs[0]), H = first.length, W = first[0] ? first[0].length : 0;
     for (var i = 0; i < pairs.length; i += 2) { var g = grid(pairs[i]); if (g.length !== H || (g[0] || []).length !== W) return ERR("#VALUE!"); }
     var tests = []; for (var k = 0; k < pairs.length; k += 2) tests.push({ g: grid(pairs[k]), f: crit(pairs[k + 1]) });
+    room(H * W); pass(H * W * tests.length);
     for (var r = 0; r < H; r++) for (var c = 0; c < W; c++) { if (tests.every(function (x) { return x.f(x.g[r][c]); })) out.push(target ? (target[r] || [])[c] : 1); }
     return out;
   }
+  function most(n) { var m = n.length ? -Infinity : 0; for (var i = 0; i < n.length; i++) if (n[i] > m) m = n[i]; return m; }
+  function least(n) { var m = n.length ? Infinity : 0; for (var i = 0; i < n.length; i++) if (n[i] < m) m = n[i]; return m; }
   function lookupEq(a, b) { if (typeof a === "number" && typeof b === "number") return a === b; return str(a).toLowerCase() === str(b).toLowerCase(); }
   function round(x, d, mode) { var f = Math.pow(10, d); var y = x * f; y = mode === "up" ? (y < 0 ? -Math.ceil(-y - 1e-9) : Math.ceil(y - 1e-9)) : mode === "down" ? (y < 0 ? -Math.floor(-y + 1e-9) : Math.floor(y + 1e-9)) : (y < 0 ? -Math.round(-y + 1e-9) : Math.round(y + 1e-9)); return y / f; }
   function addMonths(s, n) { var d = fromSerial(s), m = d.m - 1 + n, y = d.y + Math.floor(m / 12); m = ((m % 12) + 12) % 12; var last = new Date(Date.UTC(y, m + 1, 0)).getUTCDate(); return serial(y, m + 1, Math.min(d.d, last)); }
@@ -279,20 +295,20 @@ var SheetEngine = (function () {
     SUM: function (a) { var n = nums(a); return isErr(n) ? n : n.reduce(function (s, x) { return s + x; }, 0); },
     PRODUCT: function (a) { var n = nums(a); return isErr(n) ? n : n.reduce(function (s, x) { return s * x; }, 1); },
     AVERAGE: function (a) { var n = nums(a); return isErr(n) ? n : n.length ? n.reduce(function (s, x) { return s + x; }, 0) / n.length : ERR("#DIV/0!"); },
-    MIN: function (a) { var n = nums(a); return isErr(n) ? n : n.length ? Math.min.apply(null, n) : 0; },
-    MAX: function (a) { var n = nums(a); return isErr(n) ? n : n.length ? Math.max.apply(null, n) : 0; },
-    COUNT: function (a) { return flat(a).filter(function (x) { return typeof x.v === "number" || (!x.fromRange && !isErr(num(x.v)) && x.v !== null && typeof x.v !== "boolean"); }).length; },
-    COUNTA: function (a) { return flat(a).filter(function (x) { return x.v !== null && x.v !== ""; }).length; },
-    COUNTBLANK: function (a) { return flat(a).filter(function (x) { return x.v === null || x.v === ""; }).length; },
+    MIN: function (a) { var n = nums(a); return isErr(n) ? n : least(n); },
+    MAX: function (a) { var n = nums(a); return isErr(n) ? n : most(n); },
+    COUNT: function (a) { return passed(flat(a)).filter(function (x) { return typeof x.v === "number" || (!x.fromRange && !isErr(num(x.v)) && x.v !== null && typeof x.v !== "boolean"); }).length; },
+    COUNTA: function (a) { return passed(flat(a)).filter(function (x) { return x.v !== null && x.v !== ""; }).length; },
+    COUNTBLANK: function (a) { return passed(flat(a)).filter(function (x) { return x.v === null || x.v === ""; }).length; },
     COUNTIF: function (a) { return ifs([a[0], a[1]], "count").length; },
     COUNTIFS: function (a) { var r = ifs(a, "count"); return isErr(r) ? r : r.length; },
     SUMIF: function (a) { var r = ifs([a.length > 2 ? a[2] : a[0], a[0], a[1]], "sum"); return isErr(r) ? r : r.reduce(function (s, x) { return typeof x === "number" ? s + x : s; }, 0); },
     SUMIFS: function (a) { var r = ifs(a, "sum"); return isErr(r) ? r : r.reduce(function (s, x) { return typeof x === "number" ? s + x : s; }, 0); },
     AVERAGEIF: function (a) { var r = ifs([a.length > 2 ? a[2] : a[0], a[0], a[1]], "avg"); if (isErr(r)) return r; r = r.filter(function (x) { return typeof x === "number"; }); return r.length ? r.reduce(function (s, x) { return s + x; }, 0) / r.length : ERR("#DIV/0!"); },
     AVERAGEIFS: function (a) { var r = ifs(a, "avg"); if (isErr(r)) return r; r = r.filter(function (x) { return typeof x === "number"; }); return r.length ? r.reduce(function (s, x) { return s + x; }, 0) / r.length : ERR("#DIV/0!"); },
-    MAXIFS: function (a) { var r = ifs(a, "max"); if (isErr(r)) return r; r = r.filter(function (x) { return typeof x === "number"; }); return r.length ? Math.max.apply(null, r) : 0; },
-    MINIFS: function (a) { var r = ifs(a, "min"); if (isErr(r)) return r; r = r.filter(function (x) { return typeof x === "number"; }); return r.length ? Math.min.apply(null, r) : 0; },
-    SUMPRODUCT: function (a) { var gs = a.map(grid), H = gs[0].length, W = (gs[0][0] || []).length, s = 0; for (var i = 0; i < gs.length; i++) if (gs[i].length !== H || (gs[i][0] || []).length !== W) return ERR("#VALUE!"); for (var r = 0; r < H; r++) for (var c = 0; c < W; c++) { var p = 1; for (var k = 0; k < gs.length; k++) { var v = gs[k][r][c]; if (isErr(v)) return v; p *= typeof v === "number" ? v : typeof v === "boolean" ? (v ? 1 : 0) : 0; } s += p; } return s; },
+    MAXIFS: function (a) { var r = ifs(a, "max"); if (isErr(r)) return r; r = r.filter(function (x) { return typeof x === "number"; }); return most(r); },
+    MINIFS: function (a) { var r = ifs(a, "min"); if (isErr(r)) return r; r = r.filter(function (x) { return typeof x === "number"; }); return least(r); },
+    SUMPRODUCT: function (a) { var gs = a.map(grid), H = gs[0].length, W = (gs[0][0] || []).length, s = 0; for (var i = 0; i < gs.length; i++) if (gs[i].length !== H || (gs[i][0] || []).length !== W) return ERR("#VALUE!"); pass(H * W * gs.length); for (var r = 0; r < H; r++) for (var c = 0; c < W; c++) { var p = 1; for (var k = 0; k < gs.length; k++) { var v = gs[k][r][c]; if (isErr(v)) return v; p *= typeof v === "number" ? v : typeof v === "boolean" ? (v ? 1 : 0) : 0; } s += p; } return s; },
     AND: function (a) { var any = false; for (var i = 0; i < a.length; i++) { var fl = flat([a[i]]); for (var j = 0; j < fl.length; j++) { var v = fl[j].v; if (fl[j].fromRange && (v === null || typeof v === "string")) continue; var b = bool(v); if (isErr(b)) return b; any = true; if (!b) return false; } } return any ? true : ERR("#VALUE!"); },
     OR: function (a) { var any = false; for (var i = 0; i < a.length; i++) { var fl = flat([a[i]]); for (var j = 0; j < fl.length; j++) { var v = fl[j].v; if (fl[j].fromRange && (v === null || typeof v === "string")) continue; var b = bool(v); if (isErr(b)) return b; any = true; if (b) return true; } } return any ? false : ERR("#VALUE!"); },
     NOT: function (a) { var b = bool(a[0]); return isErr(b) ? b : !b; },
@@ -324,10 +340,10 @@ var SheetEngine = (function () {
     ISNUMBER: function (a) { return typeof a[0] === "number"; },
     ISTEXT: function (a) { return typeof a[0] === "string"; },
     ISERROR: function (a) { return isErr(a[0]); },
-    VLOOKUP: function (a) { var key = a[0], g = grid(a[1]), col = num(a[2]), approx = a.length > 3 ? bool(a[3]) : true; if (isErr(key)) return key; if (isErr(col)) return col; if (col < 1 || col > (g[0] || []).length) return ERR("#REF!"); var hit = -1; for (var r = 0; r < g.length; r++) { var v = g[r][0]; if (approx === true) { if (typeof v === "number" && typeof key === "number" && v <= key) hit = r; else if (lookupEq(v, key)) hit = r; } else if (lookupEq(v, key)) { hit = r; break; } } return hit < 0 ? ERR("#N/A") : g[hit][col - 1]; },
-    MATCH: function (a) { var key = a[0], fl = flat([a[1]]).map(function (x) { return x.v; }), type = a.length > 2 ? num(a[2]) : 1, hit = -1; for (var i = 0; i < fl.length; i++) { if (type === 0) { if (lookupEq(fl[i], key)) { hit = i; break; } } else if (typeof fl[i] === "number" && typeof key === "number" && (type > 0 ? fl[i] <= key : fl[i] >= key)) hit = i; else if (lookupEq(fl[i], key)) hit = i; } return hit < 0 ? ERR("#N/A") : hit + 1; },
+    VLOOKUP: function (a) { var key = a[0], g = grid(a[1]), col = num(a[2]), approx = a.length > 3 ? bool(a[3]) : true; if (isErr(key)) return key; if (isErr(col)) return col; if (col < 1 || col > (g[0] || []).length) return ERR("#REF!"); pass(g.length); var hit = -1; for (var r = 0; r < g.length; r++) { var v = g[r][0]; if (approx === true) { if (typeof v === "number" && typeof key === "number" && v <= key) hit = r; else if (lookupEq(v, key)) hit = r; } else if (lookupEq(v, key)) { hit = r; break; } } return hit < 0 ? ERR("#N/A") : g[hit][col - 1]; },
+    MATCH: function (a) { var key = a[0], fl = flat([a[1]]).map(function (x) { return x.v; }), seen = pass(fl.length), type = a.length > 2 ? num(a[2]) : 1, hit = -1; for (var i = 0; i < fl.length; i++) { if (type === 0) { if (lookupEq(fl[i], key)) { hit = i; break; } } else if (typeof fl[i] === "number" && typeof key === "number" && (type > 0 ? fl[i] <= key : fl[i] >= key)) hit = i; else if (lookupEq(fl[i], key)) hit = i; } return hit < 0 ? ERR("#N/A") : hit + 1; },
     INDEX: function (a) { var g = grid(a[0]), r = num(a[1] === undefined ? 1 : a[1]), c = num(a.length > 2 ? a[2] : 1); if (isErr(r)) return r; if (isErr(c)) return c; if (g.length === 1 && a.length === 2) { c = r; r = 1; } if (r < 1 || c < 1 || r > g.length || c > (g[0] || []).length) return ERR("#REF!"); return g[r - 1][c - 1]; },
-    XLOOKUP: function (a) { var key = a[0], keys = flat([a[1]]).map(function (x) { return x.v; }), vals = flat([a[2]]).map(function (x) { return x.v; }); if (keys.length !== vals.length) return ERR("#VALUE!"); for (var i = 0; i < keys.length; i++) if (lookupEq(keys[i], key)) return vals[i]; return a.length > 3 ? a[3] : ERR("#N/A"); }
+    XLOOKUP: function (a) { var key = a[0], keys = flat([a[1]]).map(function (x) { return x.v; }), vals = flat([a[2]]).map(function (x) { return x.v; }); if (keys.length !== vals.length) return ERR("#VALUE!"); pass(keys.length); for (var i = 0; i < keys.length; i++) if (lookupEq(keys[i], key)) return vals[i]; return a.length > 3 ? a[3] : ERR("#N/A"); }
   });
   F.CONCATENATE = F.CONCAT;
   // Functions Excel stores with a prefix in an .xlsx file.
@@ -394,10 +410,8 @@ var SheetEngine = (function () {
     }
     var s = span(cell(parts[0], false), parts[1] ? cell(parts[1], true) : cell(parts[0], false));
     if (!s) return ERR("#REF!");
-    if ((this.steps += s.n) > LIMIT.steps) return ERR("#CALC!"); // the work a sheet can make is bounded: an error cell, never a hang
-    var rows = [];
-    for (var r = s.r0; r <= s.r1; r++) { var row = []; for (var c = s.c0; c <= s.c1; c++) row.push(this.value(tabName, addr(r, c))); rows.push(row); }
-    return parts[1] ? { range: true, rows: rows } : rows[0][0];
+    var got = mk(s.r1 - s.r0 + 1, s.c1 - s.c0 + 1, function (r, c) { return self.value(tabName, addr(s.r0 + r, s.c0 + c)); });
+    return parts[1] ? got : got.rows[0][0];
   };
   var KEEP_RANGE = null;
   Book.prototype.evaluate = function (n, here, dr, dc) {
@@ -419,9 +433,8 @@ var SheetEngine = (function () {
         var args = n.a.map(ev);
         var keepRange = KEEP_RANGE || (KEEP_RANGE = map({ SUM: 1, PRODUCT: 1, AVERAGE: 1, MIN: 1, MAX: 1, COUNT: 1, COUNTA: 1, COUNTBLANK: 1, COUNTIF: 1, COUNTIFS: 1, SUMIF: 1, SUMIFS: 1, AVERAGEIF: 1, AVERAGEIFS: 1, MAXIFS: 1, MINIFS: 1, SUMPRODUCT: 1, AND: 1, OR: 1, CONCAT: 1, CONCATENATE: 1, VLOOKUP: 1, MATCH: 1, INDEX: 1, XLOOKUP: 1 }));
         if (!keepRange[f] && args.some(isRange)) { // element by element, as inside SUMPRODUCT
-          var shape = args.filter(isRange)[0].rows, out = [];
-          for (var rr = 0; rr < shape.length; rr++) { var orow = []; for (var c2 = 0; c2 < shape[0].length; c2++) orow.push(F[f](args.map(function (v) { if (!isRange(v)) return v; var g = v.rows; return (g[g.length === 1 ? 0 : rr] || [])[g[0].length === 1 ? 0 : c2]; }))); out.push(orow); }
-          return { range: true, rows: out };
+          var shape = args.filter(isRange)[0].rows;
+          return mk(shape.length, (shape[0] || []).length, function (rr, c2) { return F[f](args.map(function (v) { if (!isRange(v)) return v; var g = v.rows; return (g[g.length === 1 ? 0 : rr] || [])[g[0].length === 1 ? 0 : c2]; })); });
         }
         if (keepRange[f] && f !== "SUMPRODUCT") { for (var j = 0; j < args.length; j++) if (isErr(args[j]) && ["COUNT", "COUNTA", "COUNTBLANK", "IFERROR"].indexOf(f) < 0) return args[j]; }
         return F[f](args);
@@ -429,12 +442,11 @@ var SheetEngine = (function () {
     }
     return ERR("#ERROR!");
   };
-  function map1(v, f) { if (isRange(v)) return { range: true, rows: v.rows.map(function (r) { return r.map(f); }) }; return f(v); }
+  function map1(v, f) { return isRange(v) ? mk(v.rows.length, (v.rows[0] || []).length, function (r, c) { return f(v.rows[r][c]); }) : f(v); }
   function map2(a, b, o) {
     if (isRange(a) || isRange(b)) {
-      var A = grid(a), B = grid(b), H = Math.max(A.length, B.length), W = Math.max((A[0] || []).length, (B[0] || []).length), rows = [];
-      for (var r = 0; r < H; r++) { var row = []; for (var c = 0; c < W; c++) { var x = (A[A.length === 1 ? 0 : r] || [])[(A[0] || []).length === 1 ? 0 : c], y = (B[B.length === 1 ? 0 : r] || [])[(B[0] || []).length === 1 ? 0 : c]; row.push(x === undefined || y === undefined ? ERR("#N/A") : op2(x, y, o)); } rows.push(row); }
-      return { range: true, rows: rows };
+      var A = grid(a), B = grid(b), H = Math.max(A.length, B.length), W = Math.max((A[0] || []).length, (B[0] || []).length);
+      return mk(H, W, function (r, c) { var x = (A[A.length === 1 ? 0 : r] || [])[(A[0] || []).length === 1 ? 0 : c], y = (B[B.length === 1 ? 0 : r] || [])[(B[0] || []).length === 1 ? 0 : c]; return x === undefined || y === undefined ? ERR("#N/A") : op2(x, y, o); });
     }
     return op2(a, b, o);
   }
@@ -610,7 +622,8 @@ var SheetEngine = (function () {
   }
   function csv(book, tabName) {
     var sz = book.size(tabName), tab = book.tabs[String(tabName).toLowerCase()], lines = [];
-    for (var r = 1; r <= sz.rows; r++) {
+    var rows = Math.min(sz.rows, drawSize(book, tab).rows); // the rows the page draws, at most
+    for (var r = 1; r <= rows; r++) {
       var row = [];
       for (var c = 1; c <= sz.cols; c++) {
         var a = addr(r, c), ex = book.exported(tabName, a), v = ex.v, f = cellFmt(tab, a, ex.raw, ex.inp);
@@ -821,7 +834,7 @@ if (typeof module !== "undefined") module.exports = SheetEngine;
   function renderStatus() {
     var st = document.getElementById("status"), rep = E.report(book);
     var who = !state.loaded ? "Loading people's edits…" : state.failed ? { copy: "A copy on this device: open the space's link to see people's edits.", refused: "People's edits can't load here, so this is the sheet as saved.", retry: "People's edits haven't loaded yet, so this is the sheet as saved. Trying again…" }[state.failed] : state.signedIn ? "Edits save for everyone; others' edits show within 15 s." : "Sign in to edit cells.";
-    if (state.cut) who = "Only the first " + state.cut + " rows are drawn; the downloads hold them all. " + who;
+    if (state.cut) who = "Only the first " + state.cut + " rows are drawn and in the CSV; the .xlsx holds them all. " + who;
     if (rep.errors.length) { st.textContent = "⚠ " + rep.errors.length + " cell" + (rep.errors.length > 1 ? "s show" : " shows") + " an error: " + rep.errors.slice(0, 5).join(", ") + ". " + who; st.className = "status err"; }
     else { st.textContent = "No error cells. " + who; st.className = "status"; }
   }
@@ -921,7 +934,7 @@ if (typeof module !== "undefined") module.exports = SheetEngine;
   var base = slug(data.title || "sheet");
   document.getElementById("dl-csv").onclick = function () { download(base + "-" + slug(tabObj().name) + ".csv", "text/csv", E.csv(book, tabObj().name)); };
   document.getElementById("dl-xlsx").onclick = function () { download(base + ".xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", E.xlsx(book)); };
-  var want = decodeURIComponent((location.hash.match(/tab=([^&]+)/) || [])[1] || "").toLowerCase();
+  var want = ""; try { want = decodeURIComponent((location.hash.match(/tab=([^&]+)/) || [])[1] || "").toLowerCase(); } catch (e) { /* a broken link opens the first tab */ }
   data.tabs.forEach(function (t, i) { if (t.name.toLowerCase() === want) { state.tab = i; state.picked = true; } });
   document.getElementById("tabs").addEventListener("click", function () { state.picked = true; });
   // A batch the agent pushes while it builds replaces #sheet-delta, and the page's "ss:live" event names

@@ -67,6 +67,6 @@ the functions below. Any other name shows `#NAME?` in the space.
 - `TODAY()` is the reader's date when the space opens, so highlights based on it update
   daily.
 - The errors you may see are `#DIV/0!`, `#VALUE!`, `#REF!`, `#NAME?`, `#N/A`, `#NUM!`,
-  `#CYCLE!` and `#CALC!` (the sheet asks for millions of cell reads: use smaller ranges).
+  `#CYCLE!` and `#CALC!` (the sheet asks for more than 3 million steps of work: use smaller ranges).
   A range past row 10,000 or column ALL is `#REF!`, and text past 32,767 characters is
   `#VALUE!`, as in Excel. The status line under the buttons lists every error cell.

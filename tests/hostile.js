@@ -78,6 +78,17 @@ module.exports = function ({ E, test, script, within, ROOT }) {
     assert.strictEqual(new E.Book({ tabs: [{ name: "T", cells: { A1: "Bike stock", A2: "bike", A3: "Parts", B2: '=COUNTIF(A1:A3,"?ike")' } }] }).value("T", "B2"), 1);
     assert.strictEqual(new E.Book({ tabs: [{ name: "T", cells: { A1: "Bike stock", A2: "bike", A3: "Parts", B3: '=COUNTIF(A1:A3,"*s*")' } }] }).value("T", "B3"), 2);
   });
+  test("element-wise arrays are capped before they're made, and every pass over one is charged", () => {
+    const t0 = Date.now();
+    const one = (f) => within(3000, () => new E.Book({ tabs: [{ name: "T", cells: { Z1: f } }] }).value("T", "Z1"));
+    assert.strictEqual(errOf(one("=SUMPRODUCT((A1:A2000=1)*(A1:GR1=1))")), "#CALC!"); // 2,000 x 200 = 400,000 cells
+    assert.strictEqual(errOf(one("=SUMPRODUCT((A1:A10000=1)*(A1:ALL1=1))")), "#CALC!"); // 10 million
+    const passes = Math.ceil(E.LIMIT.steps / 200000) + 1; // enough passes of 200,000 cells to spend the budget
+    assert.strictEqual(errOf(one("=SUM(" + "-(".repeat(passes) + "A1:T10000" + ")".repeat(passes + 1))), "#CALC!");
+    assert.strictEqual(errOf(one("=SUMPRODUCT(" + Array(passes).fill("A1:T10000").join(",") + ")")), "#CALC!");
+    assert.strictEqual(one("=SUMPRODUCT((A1:A20=0)*(A1:T1=0))"), 400); // a small one still works
+    assert.ok(Date.now() - t0 < 4000, `took ${Date.now() - t0} ms`);
+  });
   // --- a person's record ---
   test("a malformed edit in a person's record is skipped; the good ones still count", () => {
     const edits = {
@@ -106,6 +117,10 @@ module.exports = function ({ E, test, script, within, ROOT }) {
     assert.strictEqual(b.value("Budget", "B1"), null);
     assert.strictEqual(errOf(b.value("Budget", "C1") || new E.Book({ tabs: [{ name: "Budget", cells: { C1: "=constructor!A1+toString!A1" } }] }).value("Budget", "C1")), "#REF!");
     assert.match(script("sheet-ui"), /E\.mergeEdits\(/);
+  });
+  test("a link with a broken #tab= still opens the sheet", () => {
+    const ui = script("sheet-ui"), line = ui.split("\n").find((l) => l.includes("location.hash"));
+    assert.match(line, /try \{[^}]*decodeURIComponent[^}]*\} catch/, line);
   });
   // --- downloads ---
   function parseCsv(text) { // RFC 4180: quoted fields, "" inside them
@@ -146,6 +161,13 @@ module.exports = function ({ E, test, script, within, ROOT }) {
     }
     assert.match(xml, /<c r="D1" s="\d+" t="inlineStr"><is><t xml:space="preserve">@SUM\(1\+1\)<\/t>/);
   });
+  test("CSV of a tab with someone's edit at the far corner stays within the cap on cells", () => {
+    const corner = E.colName(E.LIMIT.cols) + E.LIMIT.rows;
+    const b = new E.Book({ tabs: [{ name: "T", cells: { A1: "x" } }] }, { t: { [corner]: { v: 1, at: "2026-11-14T10:00:00Z", by: "Sam", peer: true } } });
+    const lines = within(3000, () => E.csv(b, "T")).trim().split("\r\n");
+    assert.ok(lines.length * E.LIMIT.cols <= E.LIMIT.cells, String(lines.length));
+    assert.match(script("sheet-ui"), /drawn and in the CSV; the \.xlsx holds them all/);
+  });
   test("CSV: text starting with = + - or @ gets a leading apostrophe; numbers don't", () => {
     const rows = parseCsv(E.csv(exportBook(), "Budget"));
     assert.strictEqual(rows[0][3], "'@SUM(1+1)");
@@ -173,14 +195,15 @@ module.exports = function ({ E, test, script, within, ROOT }) {
     const NUM = ["0", "1", "-1", "1e308", "1e-308", "9007199254740993", "3.5", "100%"];
     const JUNK = ['"', "(", ")", "!", ":", "$", "'", "A", "1", ",", "*", "[", "|", "#", "&", "~", "\\", "=", ";"];
     function expr(d) {
-      const k = d > 3 ? rnd() * 3 : rnd() * 7.2;
-      if (k < 1) return rnd() < 0.03 ? "A1:T10000" : pick(REFS);
+      const k = d > 3 ? rnd() * 3 : rnd() * 7.3;
+      if (k < 1) return rnd() < 0.03 ? pick(["A1:T10000", "A1:A2000", "A1:GR1", "A1:A10000", "A1:ALL1"]) : pick(REFS);
       if (k < 2) return pick(NUM);
       if (k < 3) return pick(STR);
       if (k < 4) return pick(FNS) + "(" + Array.from({ length: Math.floor(rnd() * 4) }, () => expr(d + 1)).join(",") + ")";
       if (k < 5) return expr(d + 1) + pick(["+", "-", "*", "/", "^", "&", "=", "<>", "<", ">="]) + expr(d + 1);
       if (k < 6) return pick(["-", "+", "("]) + expr(d + 1) + (rnd() < 0.5 ? ")" : "%");
       if (k < 7) return "(".repeat(1 + Math.floor(rnd() * 3)) + expr(d + 1) + ")".repeat(Math.floor(rnd() * 4));
+      if (k < 7.1) return "-(".repeat(4) + pick(["A1:A2000", "A1:GR1"]) + ")".repeat(4) + pick(["*", "+", "="]) + pick(["A1:A2000", "A1:GR1", "A1:ALL1"]);
       return Array.from({ length: 1 + Math.floor(rnd() * 12) }, () => pick(JUNK)).join("");
     }
     const at = () => pick(["2026-11-14T10:00:00Z", "2099-01-01T00:00:00Z", "bad", "", 5, null]);
