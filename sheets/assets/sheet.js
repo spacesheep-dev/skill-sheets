@@ -216,6 +216,12 @@ if (cmd === "start") {
   try { run(["read", space, "-o", WORK]); } catch (e) { console.error(`read: ${why(e)}`); }
   const page = fs.existsSync(path.join(WORK, "index.html")) ? fs.readFileSync(path.join(WORK, "index.html"), "utf8") : "";
   const m = /<script type="application\/json" id="sheet-data">([\s\S]*?)<\/script>/.exec(page);
+  // An empty space shows an empty grid at once, live only (nothing is saved): the person sees the sheet coming.
+  const words = page.replace(/<(script|style)[\s\S]*?<\/\1>/g, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  if (!m && words.length < 200) {
+    try { live({ html: buildPage(fs.readFileSync(STARTER, "utf8"), { title: "Setting up the sheet…", lede: "", tabs: [{ name: "Sheet1", freeze: 1, cells: {} }] }) }); console.log(`an empty grid is on screen (${took()})`); }
+    catch (e) { console.error(`empty grid not shown: ${why(e)}`); }
+  }
   if (m && !fs.existsSync(path.join(DIR, "data.json"))) {
     const sheet = JSON.parse(m[1]);
     fs.writeFileSync(path.join(DIR, "data.json"), JSON.stringify(sheet, null, 1));
@@ -233,8 +239,10 @@ function pushSheet(sheet, say) {
   const sent = fs.existsSync(sentFile) ? JSON.parse(fs.readFileSync(sentFile, "utf8")) : null;
   if (!sent || frame(sent) !== frame(sheet)) {
     const page = buildPage(fs.readFileSync(STARTER, "utf8"), sheet);
-    try { const a = live(Object.assign({ html: page }, say ? { status: say.slice(0, 200) } : {})); console.log(`pushed the whole page (${page.length} bytes${seen(a)}, ${took()})`); }
+    // A page and a status can't go in one call (the API takes one or the other); a batch and a status can.
+    try { const a = live({ html: page }); console.log(`pushed the whole page (${page.length} bytes${seen(a)}, ${took()})`); }
     catch (e) { console.error(`page push refused: ${why(e)}`); }
+    if (say) status(say);
     if (!fs.existsSync(pubFile)) {
       try { publish(sheet, say || "The sheet's tabs and headers"); console.log(`saved it, so a later visitor sees it too (${took()})`); }
       catch (e) { console.error(`save refused: ${why(e)}`); }

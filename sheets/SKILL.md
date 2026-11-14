@@ -85,11 +85,14 @@ thing instead.
    the left, calculated columns on the right, one header row, frozen. Tab names are short
    and plain, at most 31 characters, with none of `[ ] : * ? / \`. Moving a table after
    the first push sends the whole page again.
-4. **Push the frame within 30 seconds.** One Write of `data.json`: `title`, `lede` (one or
-   two sentences: what the sheet holds and who updates it), `description` (one line),
-   `currency` and `locale`, and each tab with `name`, `freeze`, `cols` (widths and number
-   formats), `lists` and `checks`, and only its header cells. No rows, highlights or
-   charts yet. Then `sheet.js push "Setting up <the tabs>"`.
+4. **Push the frame within 30 seconds,** before you read any reference: it needs none. One
+   short Write of `data.json` with `title`, `lede` (one or two sentences: what the sheet
+   holds, who updates it, that the figures are examples) and each tab's `name`, `freeze: 1`
+   and header cells, such as `{"name": "Budget", "freeze": 1, "cells": {"A1": "Category",
+   "B1": "Monthly budget"}}`. Then `sheet.js push "Setting up <the tabs>"`.
+   Then read `references/sheet-format.md` and add to `data.json` what makes the rows look
+   right as they land: `description`, `currency`, `locale`, and each tab's `cols` (widths
+   and number formats), `lists` and `checks`. Push again: the page redraws in a second.
 5. **Push the rows in batches.** Each batch is one Write of `cells/01-<what>.json`, then
    `02-…` and on: `{"tab": "Transactions", "cells": {"A2": "2026-11-03", "B2": "Stock",
    "C2": 300}}`, one tab and at most 500 cells. Then `sheet.js push "<what is landing>"`,
@@ -277,7 +280,7 @@ changed and point to "What changed in this version". Never paste the JSON, and s
 - `assets/sheet.js`: the one script you run. Its header lists each step; you don't need
   to read it.
 - `references/sheet-format.md`: the JSON, field by field, with a full small example. Read
-  it before you write `data.json` the first time.
+  it right after the first push.
 - `references/functions.md`: every function the engine knows, with notes on Excel
   differences. Read it before you write formulas you haven't used here.
 - `references/examples.md`: three worked cases: a sheet from one ask, a change with its
