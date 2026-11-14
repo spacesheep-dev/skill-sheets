@@ -186,6 +186,30 @@ module.exports = function ({ E, test, script, within, ROOT }) {
     assert.match(xml, new RegExp(`${k.out} more rows aren't in this file`));
     assert.match(script("sheet-ui"), /drawn and downloaded/);
   });
+  test("a cut-down workbook holds values, not formulas, so it opens to the page's numbers", () => {
+    const corner = E.colName(E.LIMIT.cols) + E.LIMIT.rows;
+    const b = new E.Book({ tabs: [{ name: "T", cells: { A1: "=A9999+1", A9999: 99, [corner]: 1 } }] });
+    assert.strictEqual(b.value("T", "A1"), 100);
+    const xml = Buffer.from(E.xlsx(b)).toString("utf8");
+    assert.match(xml, /<c r="A1"[^>]*><v>100<\/v><\/c>/);
+    assert.ok(!xml.includes("<f>"), "a cut-down workbook kept a live formula");
+    assert.match(xml, /holds values, not formulas/);
+    const whole = Buffer.from(E.xlsx(new E.Book({ tabs: [{ name: "T", cells: { A1: "=A9999+1", A9999: 99 } }] }))).toString("utf8");
+    assert.match(whole, /<f>A9999\+1<\/f>/); // a whole workbook keeps its live formulas
+  });
+  test("files are made by makeFile, within the budget: out of budget is a refusal, never a partial file", () => {
+    const ok = E.makeFile("csv", { tabs: [{ name: "T", cells: { A1: 2, A2: "=A1*21" } }] }, {}, "T");
+    assert.deepStrictEqual([ok.ok, ok.bytes.split("\r\n")[1]], [true, "42"]);
+    const x = E.makeFile("xlsx", { tabs: [{ name: "T", cells: { A1: 2 } }] }, {}, "T");
+    assert.ok(x.ok && x.bytes.length > 500);
+    const cells = { A1: 1 };
+    for (let r = 1; r <= 60; r++) cells["Z" + r] = "=SUM(A1:T10000)";
+    const big = within(5000, () => E.makeFile("xlsx", { tabs: [{ name: "T", cells }] }, {}, "T"));
+    assert.deepStrictEqual([big.ok, big.bytes], [false, undefined]);
+    const ui = script("sheet-ui");
+    assert.match(ui, /too big to download in one piece/);
+    assert.doesNotMatch(ui, /E\.(csv|xlsx)\(/); // the page never makes a file itself
+  });
   test("CSV: text starting with = + - or @ gets a leading apostrophe; numbers don't", () => {
     const rows = parseCsv(E.csv(exportBook(), "Budget"));
     assert.strictEqual(rows[0][3], "'@SUM(1+1)");
@@ -217,6 +241,9 @@ module.exports = function ({ E, test, script, within, ROOT }) {
     self.onmessage({ data: { id: 8, data: { tabs: [{ name: "T", cells: { Z1: eight } }] }, overlay: {} } });
     assert.strictEqual(said.find((m) => m.id === 8 && m.done).done.values["t!Z1"], 0); // inside the worker's 10M budget
     assert.strictEqual(new E.Book({ tabs: [{ name: "T", cells: { Z1: eight } }] }).value("T", "Z1").e, "#CALC!"); // the page's own stays 3M
+    self.onmessage({ data: { id: 9, file: "csv", tab: "T", data: { tabs: [{ name: "T", cells: { A1: 2, A2: "=A1*21" } }] }, overlay: {} } });
+    const file = said.find((m) => m.file === "csv");
+    assert.deepStrictEqual([file.id, file.ok, file.bytes.split("\r\n")[1]], [9, true, "42"]);
   });
   test("the page works the sheet out only in a worker, with a 2 s limit, and says so when it can't", () => {
     const ui = script("sheet-ui");

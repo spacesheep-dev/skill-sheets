@@ -504,7 +504,7 @@ var SheetEngine = (function () {
   // The rows a tab's downloads hold, the same in CSV and .xlsx as on screen: all of them, unless the tab is over
   // LIMIT.cells; then the first that fit, with how many were left out said in the file's last line.
   function kept(book, tab) { var sz = book.size(tab.name), rows = Math.min(sz.rows, drawSize(book, tab).rows); return { rows: rows, out: sz.rows - rows }; }
-  function leftOut(n) { return n + " more row" + (n === 1 ? " isn't" : "s aren't") + " in this file: the tab is over " + LIMIT.cells + " cells, so only the first rows fit"; }
+  function leftOut(n) { return n + " more row" + (n === 1 ? " isn't" : "s aren't") + " in this file: the tab is over " + LIMIT.cells + " cells, so only the first rows fit, and the file holds values, not formulas"; }
   function drawSize(book, tab) {
     var sz = book.size(tab.name), cols = Math.min(LIMIT.cols, Math.max(sz.cols + 1, (tab.cols || []).length, 4)), rows = Math.min(LIMIT.rows, Math.max(sz.rows + 3, 12));
     var fit = Math.max(1, Math.floor(LIMIT.cells / cols));
@@ -583,6 +583,8 @@ var SheetEngine = (function () {
     }
     var dxfs = [], dxfKey = map();
     function dxfFor(style) { if (!(style in dxfKey)) { dxfKey[style] = dxfs.length; dxfs.push(style); } return dxfKey[style]; }
+    // A cut-down workbook holds what each cell shows, so it opens to the page's numbers without the rows left out.
+    var whole = book.order.every(function (n) { return !kept(book, book.tabs[n.toLowerCase()]).out; });
     var sheets = book.order.map(function (name) {
       var tab = book.tabs[name.toLowerCase()], raw = book.raw[name.toLowerCase()], rows = map(), k = kept(book, tab);
       Object.keys(raw).forEach(function (a) { var p = parseAddr(a); if (p && p.r <= k.rows) (rows[p.r] = rows[p.r] || []).push({ a: a, c: p.c }); });
@@ -590,6 +592,7 @@ var SheetEngine = (function () {
       Object.keys(rows).map(Number).sort(function (p, q) { return p - q; }).forEach(function (r) {
         var cells = rows[r].sort(function (p, q) { return p.c - q.c; }).map(function (it) {
           var c = raw[it.a], ex = book.exported(name, it.a), inp = ex.inp, v = ex.v;
+          if (!whole && inp && inp.formula !== undefined) inp = { value: v, date: inp.date };
           var s = styleFor(cellFmt(tab, it.a, c, inp), !!(c.b || (freeze && r <= freeze && (inp.date || (!inp.formula && typeof v === "string")))), typeof v === "string" && RISKY.test(v));
           var sAttr = s ? ' s="' + s + '"' : "";
           if (inp && inp.formula !== undefined) {
@@ -600,6 +603,7 @@ var SheetEngine = (function () {
             return '<c r="' + it.a + '"' + sAttr + ' t="str">' + f + "<v>" + x(str(v)) + "</v></c>";
           }
           if (v === null || v === "") return "";
+          if (isErr(v)) return '<c r="' + it.a + '"' + sAttr + ' t="e"><v>' + x(v.e) + "</v></c>";
           if (typeof v === "number") return '<c r="' + it.a + '"' + sAttr + "><v>" + v + "</v></c>";
           if (typeof v === "boolean") return '<c r="' + it.a + '"' + sAttr + ' t="b"><v>' + (v ? 1 : 0) + "</v></c>";
           return '<c r="' + it.a + '"' + sAttr + ' t="inlineStr"><is><t xml:space="preserve">' + x(v) + "</t></is></c>";
@@ -722,6 +726,13 @@ var SheetEngine = (function () {
     });
     return out;
   }
+  // A download, made where the sums are made and within the same budget: {ok, bytes}, or {ok: false} when the
+  // sheet is too big to make in one piece. Never a partial file.
+  function makeFile(kind, data, overlay, tabName) {
+    var book = new Book(data, overlay), bytes;
+    try { bytes = kind === "csv" ? csv(book, tabName) : xlsx(book); } catch (e) { return { ok: false }; }
+    return book.steps > LIMIT.steps ? { ok: false } : { ok: true, bytes: bytes };
+  }
   // Everything the page shows that takes working out, in one call, so it can run off the page's thread: the value of
   // every formula cell ("tab!A1", tab lowercased), each tab's highlighted cells, and what changed in this version.
   // part(values) gets what's done every 50 ms, so a calculation stopped for taking too long keeps what it finished.
@@ -737,7 +748,7 @@ var SheetEngine = (function () {
     book.order.forEach(function (n) { rules[n.toLowerCase()] = ruleHits(book, book.tabs[n.toLowerCase()]); });
     return { values: values, rules: rules, delta: delta(data, overlay, book) };
   }
-  return { Book: Book, parse: parse, fmtValue: fmtValue, cellFmt: cellFmt, xlsx: xlsx, csv: csv, report: report, expand: expand, parseAddr: parseAddr, addr: addr, colName: colName, isErr: isErr, serial: serial, NAMES: NAMES, applyDelta: applyDelta, BATCH: BATCH, LIMIT: LIMIT, isCell: isCell, drawSize: drawSize, kept: kept, cleanEdits: cleanEdits, mergeEdits: mergeEdits, map: map, calc: calc, ruleHits: ruleHits };
+  return { Book: Book, parse: parse, fmtValue: fmtValue, cellFmt: cellFmt, xlsx: xlsx, csv: csv, report: report, expand: expand, parseAddr: parseAddr, addr: addr, colName: colName, isErr: isErr, serial: serial, NAMES: NAMES, applyDelta: applyDelta, BATCH: BATCH, LIMIT: LIMIT, isCell: isCell, drawSize: drawSize, kept: kept, cleanEdits: cleanEdits, mergeEdits: mergeEdits, map: map, calc: calc, ruleHits: ruleHits, makeFile: makeFile };
 })();
 if (typeof module !== "undefined") module.exports = SheetEngine;
 </script>
@@ -747,6 +758,7 @@ if (typeof module !== "undefined") module.exports = SheetEngine;
 self.onmessage = function (e) {
   var m = e.data || {};
   SheetEngine.LIMIT.steps = 10000000; // off the page's thread a 5,000-row sheet fits; the page's 2 s limit is the backstop
+  if (m.file) { var f = SheetEngine.makeFile(m.file, m.data, m.overlay, m.tab); self.postMessage({ id: m.id, file: m.file, ok: f.ok, bytes: f.bytes }); return; }
   try { self.postMessage({ id: m.id, done: SheetEngine.calc(m.data, m.overlay, function (part) { self.postMessage({ id: m.id, part: part }); }) }); }
   catch (err) { self.postMessage({ id: m.id, failed: String(err && err.message || err) }); }
 };
@@ -777,7 +789,7 @@ self.onmessage = function (e) {
   // instead of a frozen tab. The grid draws at once from what's known: a formula cell keeps its last value until the
   // new one arrives, and shows … only before it has ever had one. state.ver goes up whenever the cells or edits change.
   var PENDING = { pending: true }, LIMIT_MS = 2000;
-  var calc = { vals: E.map(), rules: E.map(), delta: [], job: 0, ver: -1, w: null, tries: 0, timer: null, got: E.map(), busy: false, late: false, then: [], msg: null };
+  var calc = { vals: E.map(), rules: E.map(), delta: [], job: 0, ver: -1, w: null, tries: 0, timer: null, got: E.map(), busy: false, late: false, msg: null };
   var SOURCES = [ // the page's own engine as a blob; else the copy sheet.js saves beside the page, for pages whose rules refuse blobs
     function () { return new Worker(URL.createObjectURL(new Blob([document.getElementById("sheet-engine").textContent + "\n" + document.getElementById("sheet-worker").textContent], { type: "text/javascript" }))); },
     function () { return new Worker(BASE + "/sheet-worker.js"); }];
@@ -816,12 +828,23 @@ self.onmessage = function (e) {
     if (r.failed) { stop(); calc.tries = SOURCES.length; send(); draw(); }
   }
   function merge(vals) { Object.keys(vals).forEach(function (k) { calc.vals[k] = vals[k]; calc.got[k] = true; }); }
-  function done(r) { // a download waiting for the values gets a book built from them
-    if (r) { calc.rules = E.map(r.rules); calc.delta = r.delta; }
-    calc.busy = false; var then = calc.then; calc.then = [];
-    if (then.length) { rebuild(); then.forEach(function (f) { f(); }); }
+  function done(r) { if (r) { calc.rules = E.map(r.rules); calc.delta = r.delta; } calc.busy = false; }
+  // A download is made in a worker of its own, within the same 2 s; with no worker, here within the small budget.
+  // Out of time or budget, the person is told; they never get a partial file.
+  var TOO_BIG = "This sheet is too big to download in one piece.";
+  function makeFile(kind, then) {
+    var w = null, tries = 0, timer = null, msg = { id: 0, file: kind, tab: tabObj().name, data: data, overlay: overlay() };
+    function fail() { clearTimeout(timer); if (w) w.terminate(); var st = document.getElementById("status"); st.textContent = TOO_BIG; st.className = "status err"; }
+    function got(r) { clearTimeout(timer); if (w) w.terminate(); if (r.ok) then(r.bytes); else fail(); }
+    (function next() {
+      while (!w && tries < SOURCES.length) { try { w = SOURCES[tries](); } catch (e) { tries++; } }
+      if (!w) return got(E.makeFile(kind, msg.data, msg.overlay, msg.tab));
+      w.onmessage = function (e) { if (e.data && e.data.file) got(e.data); };
+      w.onerror = function (ev) { if (ev.preventDefault) ev.preventDefault(); clearTimeout(timer); var dead = w; w = null; dead.terminate(); tries++; next(); };
+      w.postMessage(msg);
+      clearTimeout(timer); timer = setTimeout(fail, LIMIT_MS);
+    })();
   }
-  function whenDone(f) { if (calc.busy) calc.then.push(f); else f(); }
   var drawing = false;
   function draw() { // again with the new values, keeping what someone is typing in the formula bar
     if (drawing) return; drawing = true;
@@ -1034,8 +1057,8 @@ self.onmessage = function (e) {
   document.getElementById("show-f").onclick = function () { state.showF = !state.showF; this.setAttribute("aria-pressed", String(state.showF)); this.textContent = state.showF ? "Show values" : "Show formulas"; render(); };
   function download(name, type, bytes) { var url = URL.createObjectURL(new Blob([bytes], { type: type })), a = el("a", { href: url, download: name }); document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(url); }, 2000); }
   var base = slug(data.title || "sheet");
-  document.getElementById("dl-csv").onclick = function () { whenDone(function () { download(base + "-" + slug(tabObj().name) + ".csv", "text/csv", E.csv(book, tabObj().name)); }); };
-  document.getElementById("dl-xlsx").onclick = function () { whenDone(function () { download(base + ".xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", E.xlsx(book)); }); };
+  document.getElementById("dl-csv").onclick = function () { var name = base + "-" + slug(tabObj().name) + ".csv"; makeFile("csv", function (bytes) { download(name, "text/csv", bytes); }); };
+  document.getElementById("dl-xlsx").onclick = function () { makeFile("xlsx", function (bytes) { download(base + ".xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", bytes); }); };
   var want = ""; try { want = decodeURIComponent((location.hash.match(/tab=([^&]+)/) || [])[1] || "").toLowerCase(); } catch (e) { /* a broken link opens the first tab */ }
   data.tabs.forEach(function (t, i) { if (t.name.toLowerCase() === want) { state.tab = i; state.picked = true; } });
   document.getElementById("tabs").addEventListener("click", function () { state.picked = true; });
