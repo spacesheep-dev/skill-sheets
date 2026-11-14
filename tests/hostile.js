@@ -387,6 +387,17 @@ module.exports = function ({ E, test, script, within, ROOT }) {
     assert.ok(pushedAt >= 0 && pushedAt < lines.findIndex((l, i) => i > pushedAt && l.startsWith("deploy ")), "the page went live after the save");
     assert.match(r.stdout, /no cell changed since the last push/);
   });
+  // The CLI keeps the version a folder was last read or saved as under the path it was given, so a folder
+  // named two ways (/tmp/x and /private/tmp/x on a Mac) had no base on its first save, which was refused.
+  test("sheet.js reads and saves its folder by the folder's real path, however it was named", () => {
+    const f = folder([]), link = path.join(f.dir, "link"), real = path.join(fs.realpathSync(path.join(f.dir, "w")), ".sheet", "work");
+    fs.symlinkSync(path.join(f.dir, "w"), link);
+    const env = Object.assign({}, process.env, { PATH: `${path.join(f.dir, "bin")}:${process.env.PATH}` });
+    const r = spawnSync(process.execPath, [SHEET_JS, "-C", link, "push", "Writing Budget"], { encoding: "utf8", env });
+    assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+    const deploys = f.calls().split("\n").filter((l) => l.startsWith("deploy "));
+    assert.ok(deploys.length && deploys.every((l) => l.startsWith(`deploy ${real} `)), deploys.join("\n"));
+  });
   test("sheet.js: a first save that fails exits non-zero, and the next push saves it", () => {
     const f = folder(["deploy"]);
     const r = f.run("push", "Writing Budget");

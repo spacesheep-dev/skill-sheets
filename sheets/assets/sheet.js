@@ -192,10 +192,12 @@ if (require.main !== module) return;
 // --- the commands ---
 const argv = process.argv.slice(2);
 if (argv[0] !== "-C" || !argv[1]) die("start with -C <folder>: node sheet.js -C <folder> <start|push|save|check>");
-const DIR = path.resolve(argv[1]);
+fs.mkdirSync(path.join(argv[1], ".sheet"), { recursive: true });
+// The folder by its real path, so every read and save names it alike: the CLI keeps a folder's base version
+// under the path it was given, and /tmp/x and /private/tmp/x (a Mac) would be two folders, the second with none.
+const DIR = fs.realpathSync(argv[1]);
 const [cmd, ...rest] = argv.slice(2);
 const ST = path.join(DIR, ".sheet");
-fs.mkdirSync(ST, { recursive: true });
 const t0 = Date.now(), took = () => `${((Date.now() - t0) / 1000).toFixed(1)} s`;
 
 let cli = ["npx", "-y", "spacesheep@latest"];
