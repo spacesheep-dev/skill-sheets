@@ -3,10 +3,14 @@
 // the spacesheep CLI (the one on the PATH, else npx's copy, downloaded from npm the first time), and reads
 // and writes only inside the folder given with -C.
 //
-//   node sheet.js -C <folder> start <link>          a status on the space at once; its id kept in .sheet/space.
-//                                                   A space that already holds a sheet: its data in data.json.
-//   node sheet.js -C <folder> start --new "<title>" a new space instead, from the starter.
-//   node sheet.js -C <folder> push ["<status>"]     the sheet in data.json and cells/*.json, on every open tab:
+//   node sheet.js -C <folder> start <link> ["<title>" "<tab>" ...]  a status, the title and the named tabs on the
+//                                                   space at once; its id kept in .sheet/space; data.json seeded
+//                                                   with them; the format printed. A space that already holds a
+//                                                   sheet: its data in data.json, and the rest of the skill printed.
+//   node sheet.js -C <folder> start --new "<title>" ["<tab>" ...]  a new space instead, from the starter.
+//   node sheet.js -C <folder> push ["<status>"]     the sheet in data.json and cells/*.json, on every open tab
+//                                                   (the first push also prints references/build.md, and rows are
+//                                                   refused until it has been printed):
 //                                                   the first time, and when tabs, columns, drop-downs, ticks,
 //                                                   highlights or charts change, the whole page (also saved, so
 //                                                   a later visitor sees it); otherwise only the cells that
@@ -26,6 +30,7 @@ const vm = require("vm");
 const { execFileSync, execSync } = require("child_process");
 
 const STARTER = path.join(__dirname, "..", "references", "sheet-template.html");
+const FORMAT = path.join(__dirname, "..", "references", "sheet-format.md"), BUILD = path.join(__dirname, "..", "references", "build.md");
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const BATCH = 500;
 
@@ -197,7 +202,17 @@ const status = (text) => { try { run(["live", "push", "--space-id", space, "--st
 let space = (fs.existsSync(path.join(ST, "space")) ? fs.readFileSync(path.join(ST, "space"), "utf8") : "").trim();
 if (cmd !== "start" && cmd !== "check" && !UUID.test(space)) die(`${cmd}: no space yet; run start first, in this folder`);
 const WORK = path.join(ST, "work");
-const sentFile = path.join(ST, "sent.json"), pubFile = path.join(ST, "published");
+const sentFile = path.join(ST, "sent.json"), pubFile = path.join(ST, "published"), rulesFile = path.join(ST, "rules-read");
+// Rows come after the rules for them: the first push prints references/build.md, and until it has, a push or save
+// that holds rows (a cell below a tab's header rows, or any cells/ batch) is refused and prints it instead.
+function hasRows(sheet) { const E = eng(); return sheet.tabs.some((t) => Object.keys(t.cells || {}).some((a) => (E.parseAddr(a) || { r: 0 }).r > Math.max(1, t.freeze || 1))); }
+function rulesFirst(sheet, verb) {
+  if (fs.existsSync(rulesFile) || !hasRows(sheet)) return;
+  fs.writeFileSync(rulesFile, verb);
+  console.log("\n" + fs.readFileSync(BUILD, "utf8"));
+  die(`${verb} refused: rows come after the rules for them, printed above. Read them, then ${verb} again`, 1);
+}
+function rulesAfter() { if (fs.existsSync(rulesFile)) return; fs.writeFileSync(rulesFile, "push"); console.log("\n" + fs.readFileSync(BUILD, "utf8")); }
 function publish(sheet, message) {
   const s = Object.assign({}, sheet, { saved_at: sheet.saved_at || new Date().toISOString().replace(/\.\d+Z$/, "Z") });
   fs.mkdirSync(WORK, { recursive: true });
@@ -209,24 +224,33 @@ function publish(sheet, message) {
 }
 
 if (cmd === "start") {
-  if (rest[0] === "--new") {
+  const fresh = rest[0] === "--new", link = fresh ? null : plain("link", rest[0]);
+  const title = plain("title", rest[1]) || "", names = rest.slice(2).map((n) => plain("tab name", n));
+  for (const n of names) if (!n || n.length > 31 || /[\[\]:*?\/\\]/.test(n)) die(`start: the tab name ${JSON.stringify(n)} must be 1 to 31 characters, none of [ ] : * ? / \\`);
+  if (new Set(names.map((n) => n.toLowerCase())).size !== names.length) die("start: two tabs have the same name");
+  // The sheet as the person first sees it: its title and its named tabs, nothing in them yet.
+  const seed = { title: title || "Setting up the sheet…", lede: "", tabs: (names.length ? names : ["Sheet1"]).map((n) => ({ name: n, freeze: 1, cells: {} })) };
+  const seedData = () => { if (names.length && !fs.existsSync(path.join(DIR, "data.json"))) fs.writeFileSync(path.join(DIR, "data.json"), JSON.stringify({ title: title || "Sheet", tabs: names.map((n) => ({ name: n })) }, null, 1) + "\n"); };
+  const say = (file) => console.log("\n" + fs.readFileSync(file, "utf8"));
+  if (fresh) {
     if (space) die("start: this folder already has a space; use another folder for a new one");
-    const sheet = { title: plain("title", rest[1]) || "Sheet", tabs: [{ name: "Sheet1", freeze: 1, cells: {} }] };
+    if (!title) die("start --new: give the sheet's title");
     fs.mkdirSync(WORK, { recursive: true });
     const starter = fs.readFileSync(STARTER, "utf8");
-    fs.writeFileSync(path.join(WORK, "index.html"), buildPage(starter, sheet));
+    fs.writeFileSync(path.join(WORK, "index.html"), buildPage(starter, seed));
     fs.writeFileSync(path.join(WORK, "sheet-worker.js"), workerFile(starter));
-    const out = run(["deploy", WORK, "--title", sheet.title, "--emoji", "🧮", "--json"]);
+    const out = run(["deploy", WORK, "--title", title, "--emoji", "🧮", "--json"]);
     const j = JSON.parse(out.slice(out.indexOf("{")));
     space = (j.space || j).uuid || (j.space || j).id;
     if (!UUID.test(space || "")) die("start: the new space's id isn't in the answer", 1);
     fs.writeFileSync(path.join(ST, "space"), space);
     status("Setting up the sheet");
+    seedData();
     console.log(`made a new space: ${(j.space || j).url || space}\nspace: ${space} (${took()})`);
+    say(FORMAT);
     process.exit(0);
   }
-  const link = plain("link", rest[0]);
-  if (!link) die("start: give the space's link, or --new \"<title>\"");
+  if (!link) die("start: give the space's link and the sheet's title and tabs, or --new \"<title>\" and the tabs");
   const id = UUID.test(link) ? link : ((run(["spaces", "get", link]).match(/^ *id: (.*)$/m) || [])[1] || "").trim();
   if (!UUID.test(id)) die(`start: no id in the answer to spaces get ${link}`, 1);
   if (space && space !== id) die(`start: this folder is for space ${space}; use another folder for ${id}`);
@@ -237,20 +261,25 @@ if (cmd === "start") {
   try { run(["read", space, "-o", WORK]); } catch (e) { console.error(`read: ${why(e)}`); }
   const page = fs.existsSync(path.join(WORK, "index.html")) ? fs.readFileSync(path.join(WORK, "index.html"), "utf8") : "";
   const m = /<script type="application\/json" id="sheet-data">([\s\S]*?)<\/script>/.exec(page);
-  // An empty space shows an empty grid at once, live only (nothing is saved): the person sees the sheet coming.
+  // An empty space shows the title and the named tabs at once, live only (nothing is saved): the sheet is coming.
   const words = page.replace(/<(script|style)[\s\S]*?<\/\1>/g, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
   if (!m && words.length < 200) {
-    try { live({ html: buildPage(fs.readFileSync(STARTER, "utf8"), { title: "Setting up the sheet…", lede: "", tabs: [{ name: "Sheet1", freeze: 1, cells: {} }] }) }); console.log(`an empty grid is on screen (${took()})`); }
-    catch (e) { console.error(`empty grid not shown: ${why(e)}`); }
+    try { live({ html: buildPage(fs.readFileSync(STARTER, "utf8"), seed) }); console.log(`${names.length ? "the title and " + names.length + " named tabs are" : "an empty grid is"} on screen (${took()})`); }
+    catch (e) { console.error(`grid not shown: ${why(e)}`); }
   }
   if (m && !fs.existsSync(path.join(DIR, "data.json"))) {
     const sheet = JSON.parse(m[1]);
     fs.writeFileSync(path.join(DIR, "data.json"), JSON.stringify(sheet, null, 1));
     fs.writeFileSync(sentFile, JSON.stringify(sheet));
     fs.writeFileSync(pubFile, "read");
-    console.log("the space holds a sheet: its data is in data.json");
-  } else console.log("the space holds no sheet yet: write data.json, then push");
-  console.log(`space: ${space} (${took()})`);
+    fs.writeFileSync(rulesFile, "start");
+    console.log(`the space holds a sheet: its data is in data.json\nspace: ${space} (${took()})`);
+    say(BUILD); say(FORMAT);
+    process.exit(0);
+  }
+  seedData();
+  console.log(`the space holds no sheet yet: data.json has the title and tabs; add the headers, then push\nspace: ${space} (${took()})`);
+  say(FORMAT);
   process.exit(0);
 }
 
@@ -293,7 +322,10 @@ if (cmd === "push") {
   const say = plain("status", rest[0]) || "";
   let sheet;
   try { sheet = assemble(DIR); } catch (e) { die(`push: ${e.message}`, 1); }
-  process.exit(pushSheet(sheet, say) ? 0 : 1);
+  rulesFirst(sheet, "push");
+  if (!pushSheet(sheet, say)) process.exit(1);
+  rulesAfter();
+  process.exit(0);
 }
 
 if (cmd === "save") {
@@ -302,6 +334,7 @@ if (cmd === "save") {
   const say = plain("status", rest[1]);
   let sheet;
   try { sheet = assemble(DIR); } catch (e) { die(`save: ${e.message}`, 1); }
+  rulesFirst(sheet, "save");
   try { publish(sheet, message); } catch (e) { die(`save refused: ${why(e)}`, 1); }
   console.log(`saved: ${message} (${took()})`);
   // Open tabs get what changed since the last push: highlights, charts, last cells. If that fails, the version
