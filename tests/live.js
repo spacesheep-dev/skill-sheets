@@ -101,6 +101,11 @@ module.exports = function ({ E, test, script, PAGE, ROOT }) {
     assert.strictEqual(at("/budget.html"), "sheet-place:/budget.html");
     assert.notStrictEqual(at("/v/0123abcd/budget.html"), at("/"));
     assert.notStrictEqual(at("/s/other-id/"), at("/s/0000-id/"));
+    // only a whole index file name goes: two sheets whose names end in "index" keep their own places
+    assert.notStrictEqual(at("/q1index.html"), at("/q1index.htm"));
+    assert.notStrictEqual(at("/q1index.html"), at("/q1"));
+    assert.strictEqual(at("/v/0123abcd/q1index.html"), at("/q1index.html"));
+    assert.strictEqual(at("/index.htm"), at("/"));
     assert.match(ui, /py: wantPy != null \? wantPy : window\.scrollY/); // a page not yet at full height doesn't store a shorter scroll
     assert.match(PAGE, /\.grid td\.under\{/);
   });
