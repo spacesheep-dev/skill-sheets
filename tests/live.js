@@ -65,6 +65,16 @@ module.exports = function ({ E, test, script, PAGE, ROOT }) {
     assert.match(PAGE, /<script type="application\/json" id="sheet-delta" data-ss-id="sheet-delta">\{\}<\/script>/);
   });
 
+  test("a person's typing and place outlast a batch, a rewrite and a reload", () => {
+    const ui = script("sheet-ui");
+    assert.match(ui, /fx\.value = d \? d\.text :/); // the formula bar shows the draft, whatever is redrawn
+    assert.match(ui, /if \(!state\.picked && !state\.draft\)/); // a batch doesn't pull someone typing to another tab
+    assert.match(ui, /state\.draft\.under = true/); // a batch to the very cell being typed in marks it, keeps the text
+    assert.match(ui, /history\.replaceState\(null, "", "#tab=" \+ encodeURIComponent\(t\.name\)\)/);
+    assert.match(ui, /sessionStorage\.setItem\(PLACE,/);
+    assert.match(PAGE, /\.grid td\.under\{/);
+  });
+
   // --- what sheet.js sends ---
   test("a pushed batch can't end its block or start a tag, whatever a cell holds", () => {
     const html = S.deltaEdit("Budget", { A2: "</script><img src=x onerror=alert(1)>", A3: "a & b" }).html;
