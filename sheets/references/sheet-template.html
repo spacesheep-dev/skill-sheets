@@ -88,14 +88,15 @@ table.grid{border-collapse:separate;border-spacing:0;font-variant-numeric:tabula
   </div>
 </header>
 <nav class="tabs" id="tabs" role="tablist" aria-label="Tabs"></nav>
-<div class="fx"><span class="addr" id="addr">A1</span><input id="fx" aria-label="Selected cell" autocomplete="off" spellcheck="false" disabled></div>
+<div class="fx"><span class="addr" id="addr">A1</span><input id="fx" aria-label="Selected cell" autocomplete="off" spellcheck="false"></div>
 <div class="gridbox" id="gridbox"><div class="wrap" id="wrap"><table class="grid" id="grid"></table></div><span class="more" aria-hidden="true">More columns →</span></div>
 <div class="legend" id="legend"></div>
 <section class="delta" id="delta" data-ss-id="what-changed" hidden><h2>What changed in this version</h2><p id="delta-note"></p><table id="delta-table"></table></section>
 <section class="charts" id="charts" aria-label="Charts"></section>
 
-<!-- THE SHEET. This block is the only part you write or change. Keep it valid JSON. -->
-<script type="application/json" id="sheet-data">
+<!-- THE SHEET. This block is the only part you write or change. Keep it valid JSON, with every <, > and &
+     written as \u003c, \u003e and \u0026 (sheet.js does this): the page reads it as text, never as HTML. -->
+<pre hidden id="sheet-data" data-ss-id="sheet-data">
 {
   "title": "SHEET TITLE",
   "currency": "GBP",
@@ -116,9 +117,9 @@ table.grid{border-collapse:separate;border-spacing:0;font-variant-numeric:tabula
     }
   ]
 }
-</script>
+</pre>
 <!-- Batches of cells pushed live while the sheet is built land here. Leave it as {}. -->
-<script type="application/json" id="sheet-delta" data-ss-id="sheet-delta">{}</script>
+<pre hidden id="sheet-delta" data-ss-id="sheet-delta">{}</pre>
 
 <!-- The engine: formulas, formats and the .xlsx writer. Do not edit. -->
 <script id="sheet-engine">
@@ -770,19 +771,24 @@ self.onmessage = function (e) {
 (function () {
   "use strict";
   if (typeof document === "undefined") return;
-  var E = SheetEngine, data;
-  try { data = JSON.parse(document.getElementById("sheet-data").textContent); } catch (e) { document.getElementById("status").textContent = "The sheet's data isn't valid JSON: " + e.message; document.getElementById("status").className = "status err"; return; }
+  var E = SheetEngine, data, savedAt, stamps;
+  // The sheet is the text of #sheet-data, parsed as JSON: never read as HTML, never run.
+  function text(id) { var n = document.getElementById(id); return n ? n.textContent : ""; }
+  var dataText = text("sheet-data"), deltaText = text("sheet-delta");
+  try { data = JSON.parse(dataText); } catch (e) { document.getElementById("status").textContent = "The sheet's data isn't valid JSON: " + e.message; document.getElementById("status").className = "status err"; return; }
   var m = location.pathname.match(/^\/s\/[^/]+/), BASE = m ? m[0] : "", API = BASE + "/api", COL = "cells";
   var state = { ver: 0, draft: null, tab: 0, sel: "A1", showF: false, loaded: false, signedIn: false, me: null, mine: E.map(), others: [], since: null, poll: 15000 };
-  var savedAt = Date.parse(data.saved_at || 0) || 0;
   // A cell the agent changed at time T keeps the agent's value over any person's edit made before T.
-  var stamps = E.map();
-  Object.keys(data.edited || {}).forEach(function (k) {
-    var t = Date.parse(data.edited[k]) || 0, bang = k.lastIndexOf("!");
-    var tab = (bang < 0 ? k : k.slice(0, bang)).toLowerCase(), rng = bang < 0 ? null : k.slice(bang + 1);
-    if (!rng) { stamps[tab + "!*"] = Math.max(stamps[tab + "!*"] || 0, t); return; }
-    E.expand(rng).forEach(function (p) { var key = tab + "!" + E.addr(p.r, p.c); stamps[key] = Math.max(stamps[key] || 0, t); });
-  });
+  function readStamps() {
+    savedAt = Date.parse(data.saved_at || 0) || 0; stamps = E.map();
+    Object.keys(data.edited || {}).forEach(function (k) {
+      var t = Date.parse(data.edited[k]) || 0, bang = k.lastIndexOf("!");
+      var tab = (bang < 0 ? k : k.slice(0, bang)).toLowerCase(), rng = bang < 0 ? null : k.slice(bang + 1);
+      if (!rng) { stamps[tab + "!*"] = Math.max(stamps[tab + "!*"] || 0, t); return; }
+      E.expand(rng).forEach(function (p) { var key = tab + "!" + E.addr(p.r, p.c); stamps[key] = Math.max(stamps[key] || 0, t); });
+    });
+  }
+  readStamps();
   function stampOf(tab, a) { return Math.max(stamps[tab + "!" + a] || 0, stamps[tab + "!*"] || 0); }
   function overlay() { return E.mergeEdits(state.others.concat(state.me ? [{ data: { edits: state.mine }, mine: true }] : []), data.tabs, stampOf); }
   var book;
@@ -860,6 +866,8 @@ self.onmessage = function (e) {
   function shown(v, fmt) { return v === PENDING ? "…" : E.fmtValue(v, fmt, data); }
   function tabObj() { return data.tabs[state.tab]; }
   function el(tag, attrs, text) { var n = document.createElement(tag); if (attrs) Object.keys(attrs).forEach(function (k) { n.setAttribute(k, attrs[k]); }); if (text !== undefined) n.textContent = text; return n; }
+  // A tab's name in the link, with every character the viewer's # check doesn't take (!'()*~ too) as %XX.
+  function hashOf(name) { return encodeURIComponent(name).replace(/[!'()*~]/g, function (c) { return "%" + c.charCodeAt(0).toString(16).toUpperCase(); }); }
   function slug(s) { return String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "tab"; }
   var lookups = null; // per render: which cells are drop-downs, checkboxes and highlighted
   function buildLookups(tab) {
@@ -874,7 +882,7 @@ self.onmessage = function (e) {
   function ruleClass(tab, a) { return lookups.rule[a] || null; }
   function renderTabs() {
     var nav = document.getElementById("tabs"); nav.textContent = "";
-    data.tabs.forEach(function (t, i) { var b = el("button", { type: "button", role: "tab", "aria-selected": String(i === state.tab) }, t.name); b.onclick = function () { state.tab = i; state.sel = "A1"; try { history.replaceState(null, "", "#tab=" + encodeURIComponent(t.name)); } catch (e) {} render(); keepPlace(); }; nav.appendChild(b); });
+    data.tabs.forEach(function (t, i) { var b = el("button", { type: "button", role: "tab", "aria-selected": String(i === state.tab) }, t.name); b.onclick = function () { state.tab = i; state.sel = "A1"; try { location.replace("#tab=" + hashOf(t.name)); } catch (e) {} render(); keepPlace(); }; nav.appendChild(b); });
   }
   function render() {
     rebuild(); renderTabs();
@@ -919,7 +927,8 @@ self.onmessage = function (e) {
       tb.appendChild(tr);
     }
     g.appendChild(tb);
-    renderBar(); renderLegend(); renderCharts(); renderStatus(); renderDelta(); edges();
+    renderBar(); renderLegend(); renderCharts(); renderStatus(); renderDelta(); edges(); settle();
+    var sf = document.getElementById("show-f"); sf.setAttribute("aria-pressed", String(state.showF)); sf.textContent = state.showF ? "Show values" : "Show formulas";
   }
   // A shade and "More columns" at the right edge while columns are hidden past it.
   function edges() { var w = document.getElementById("wrap"); document.getElementById("gridbox").classList.toggle("more-right", w.scrollLeft + w.clientWidth < w.scrollWidth - 2); }
@@ -1061,28 +1070,62 @@ self.onmessage = function (e) {
     if (mv) { e.preventDefault(); move(mv[0], mv[1]); }
     else if (e.key === "Enter" || e.key === "F2") { e.preventDefault(); fx.focus(); }
   });
-  document.getElementById("show-f").onclick = function () { state.showF = !state.showF; this.setAttribute("aria-pressed", String(state.showF)); this.textContent = state.showF ? "Show values" : "Show formulas"; render(); };
+  document.getElementById("show-f").onclick = function () { state.showF = !state.showF; render(); };
   function download(name, type, bytes) { var url = URL.createObjectURL(new Blob([bytes], { type: type })), a = el("a", { href: url, download: name }); document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(url); }, 2000); }
-  var base = slug(data.title || "sheet");
-  document.getElementById("dl-csv").onclick = function () { var name = base + "-" + slug(tabObj().name) + ".csv"; makeFile("csv", function (bytes) { download(name, "text/csv", bytes); }); };
-  document.getElementById("dl-xlsx").onclick = function () { makeFile("xlsx", function (bytes) { download(base + ".xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", bytes); }); };
+  function base() { return slug(data.title || "sheet"); }
+  document.getElementById("dl-csv").onclick = function () { var name = base() + "-" + slug(tabObj().name) + ".csv"; makeFile("csv", function (bytes) { download(name, "text/csv", bytes); }); };
+  document.getElementById("dl-xlsx").onclick = function () { makeFile("xlsx", function (bytes) { download(base() + ".xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", bytes); }); };
   // The person's place in this browser tab (tab, cell, scroll, typing), kept as it changes and put back at start, so
   // a whole-page rewrite or a reload doesn't lose it. Where storage is blocked, the page starts fresh as before.
-  var PLACE = "sheet-place:" + location.pathname, placing = false;
+  // The key is this sheet's address without a version's part (/v/<sha>/, where a save reloads the frame), so a save
+  // finds it; another space is another origin, and another sheet another address.
+  var PLACE = "sheet-place:" + location.pathname.replace(/^((?:\/s\/[^/]+)?)\/v\/[^/]+(?=\/)/, "$1").replace(/index\.html?$/, ""), placing = false, kept = null;
+  // The page scroll is put back once the sheet is at its full height (people's edits loaded and drawn); until then
+  // the place keeps the scroll it is waiting for, not a shorter one the page allows so far.
+  var wantPy = null;
   function keepPlace() {
     if (placing) return;
-    try { var w = document.getElementById("wrap"); sessionStorage.setItem(PLACE, JSON.stringify({ tab: tabObj().name, sel: state.sel, x: w.scrollLeft, y: w.scrollTop, py: window.scrollY || 0, draft: state.draft })); } catch (e) {}
+    var w = document.getElementById("wrap"); kept = { tab: tabObj().name, sel: state.sel, x: w.scrollLeft, y: w.scrollTop, py: wantPy != null ? wantPy : window.scrollY || 0, draft: state.draft };
+    try { sessionStorage.setItem(PLACE, JSON.stringify(kept)); } catch (e) {}
   }
+  function settle() {
+    if (wantPy == null) return;
+    try { window.scrollTo(0, wantPy); } catch (e) {}
+    if ((state.loaded && !calc.busy) || Math.abs((window.scrollY || 0) - wantPy) < 1) wantPy = null; // full height: edits in, values worked out
+  }
+  function putBack(p) { var w = document.getElementById("wrap"); w.scrollLeft = p.x || 0; w.scrollTop = p.y || 0; wantPy = p.py || 0; settle(); }
+  ["wheel", "touchmove"].forEach(function (t) { addEventListener(t, function () { wantPy = null; }, { passive: true }); }); // the person scrolls: theirs wins
   var place = null; try { place = JSON.parse(sessionStorage.getItem(PLACE) || "null"); } catch (e) {}
   if (place) data.tabs.forEach(function (t, i) { if (t.name === place.tab) { state.tab = i; state.picked = true; if (E.isCell(place.sel)) state.sel = place.sel; state.draft = place.draft && place.draft.tab === t.name ? place.draft : null; } });
   var want = ""; try { want = decodeURIComponent((location.hash.match(/tab=([^&]+)/) || [])[1] || "").toLowerCase(); } catch (e) { /* a broken link opens the first tab */ }
   data.tabs.forEach(function (t, i) { if (t.name.toLowerCase() === want && i !== state.tab) { state.tab = i; state.picked = true; state.sel = "A1"; } });
   document.getElementById("tabs").addEventListener("click", function () { state.picked = true; });
+  // A whole page the agent pushes, or a save, changes #sheet-data in place (the page's scripts are the same, so
+  // nothing re-runs): the sheet is read again and drawn where the person is, their typing kept.
+  function retake() {
+    var t = text("sheet-data"), d; dataText = t; deltaText = text("sheet-delta"); // a batch already in it is in the new data
+    try { d = JSON.parse(t); } catch (e) { var st = document.getElementById("status"); st.textContent = "An update to the sheet wasn't shown: its data isn't valid JSON."; st.className = "status err"; return; }
+    var p = kept || { x: 0, y: 0, py: 0 }, name = tabObj().name, dr = state.draft;
+    function rawAt(dd, tn, a) { var t2 = dd.tabs.filter(function (x) { return x.name === tn; })[0]; return JSON.stringify(t2 && t2.cells ? t2.cells[a] : undefined); }
+    var was = dr ? rawAt(data, dr.tab, dr.cell) : null;
+    if (!d || !Array.isArray(d.tabs) || !d.tabs.length) return;
+    data = d; readStamps(); state.ver++; // worked out again, off the page
+    var i = -1; data.tabs.forEach(function (x, j) { if (x.name === name) i = j; });
+    if (i < 0) { state.tab = 0; state.sel = "A1"; } else state.tab = i;
+    if (dr && !data.tabs.some(function (x) { return x.name === dr.tab; })) state.draft = null;
+    else if (dr && rawAt(data, dr.tab, dr.cell) !== was) dr.under = true; // theirs stays; the cell is marked
+    placing = true; render(); select(state.sel); if (i >= 0) putBack(p); if (drafting()) { state.refocus = true; renderBar(); }
+    placing = false; keepPlace();
+  }
   // A batch the agent pushes while it builds replaces #sheet-delta, and the page's "ss:live" event names
   // it. It lands outlined, on its own tab unless the person picked one.
   document.addEventListener("ss:live", function (e) {
-    if (((e.detail && e.detail.ids) || []).indexOf("sheet-delta") < 0) return;
-    var box = document.getElementById("sheet-delta"), r = E.applyDelta(data, box ? box.textContent : "");
+    var ids = (e.detail && e.detail.ids) || [];
+    if (ids.indexOf("sheet-data") >= 0 && text("sheet-data") !== dataText) return retake();
+    if (ids.indexOf("sheet-delta") < 0 || text("sheet-delta") === deltaText) return;
+    deltaText = text("sheet-delta");
+    if (/^\s*(\{\s*\})?\s*$/.test(deltaText)) return; // emptied by a whole-page update: nothing to draw
+    var r = E.applyDelta(data, deltaText);
     if (!r.ok) { var st = document.getElementById("status"); st.textContent = "A batch of cells wasn't shown: " + r.why + "."; st.className = "status err"; return; }
     var now = Date.now(), tn = r.tab.toLowerCase();
     r.cells.forEach(function (a) { stamps[tn + "!" + a] = now; });
@@ -1095,7 +1138,7 @@ self.onmessage = function (e) {
   function keepSoon() { if (!pending) { pending = true; requestAnimationFrame(function () { pending = false; keepPlace(); }); } }
   wrap.addEventListener("scroll", keepSoon, { passive: true }); addEventListener("scroll", keepSoon, { passive: true }); addEventListener("pagehide", keepPlace);
   placing = true; render(); select(state.sel);
-  if (place) { wrap.scrollLeft = place.x || 0; wrap.scrollTop = place.y || 0; try { window.scrollTo(0, place.py || 0); } catch (e) {} if (drafting()) { state.refocus = true; renderBar(); } }
+  if (place) { putBack(place); if (drafting()) { state.refocus = true; renderBar(); } }
   placing = false; keepPlace(); load(0);
 })();
 </script>

@@ -155,7 +155,8 @@ glance. A summary full of zeros or a −94% margin reads as a broken sheet.
 **Without a shell** (a Shepherd turn), take the same steps with your own tools. Read the
 JSON block with `read_document_source` (`find: 'id="sheet-data"'`, `limit: 32000`, again
 from `next_offset`), and change it with `edit_document_source`: exact old and new strings
-inside the block, up to 20 in one call, the record in the same call. For a new sheet,
+inside the block, up to 20 in one call, the record in the same call. Write every `<`, `>`
+and `&` in a cell as `\u003c`, `\u003e` and `\u0026`. For a new sheet,
 copy the starter whole and change only `<title>`, the meta description, the `<h1>`, the
 lede and the JSON block.
 

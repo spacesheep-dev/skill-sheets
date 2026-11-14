@@ -22,7 +22,9 @@
 // The agent writes only data.json (the sheet: tabs, header cells, formats, drop-downs, highlights, charts,
 // plus "lede" and "description" for the page) and cells/NN-<what>.json, one batch each:
 // {"tab": "<tab>", "cells": {"A2": "2026-11-03", "B2": "<text>", "C2": 300}}. This script builds the
-// page from the starter; cell text goes into it as JSON with <, > and & escaped, never as HTML.
+// page from the starter; cell text goes into it as JSON with <, > and & escaped, never as HTML, in a hidden
+// <pre> the page reads as text. No data is in a script, so a pushed page has the same scripts as the one on
+// screen and is changed in place: nothing re-runs, and the person's place and typing stay.
 "use strict";
 const fs = require("fs");
 const path = require("path");
@@ -40,18 +42,19 @@ const plain = (what, v) => { if (typeof v === "string" && v.startsWith("-")) die
 
 // --- the page: the starter with this sheet's words and data (pure, so tests can call it) ---
 const escText = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-// JSON inside <script>: no <, > or & can end the block or start a tag, whatever a cell holds.
-const scriptJson = (x, space) => JSON.stringify(x, null, space).replace(/</g, "\\u003c").replace(/>/g, "\\u003e").replace(/&/g, "\\u0026").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
+// The JSON in the page's data blocks has no <, > or & at all, whatever a cell holds: no tag, no entity, nothing
+// that ends the block. HTML text without them is read as written, so the page's textContent is this JSON exactly.
+const dataJson = (x, space) => JSON.stringify(x, null, space).replace(/</g, "\\u003c").replace(/>/g, "\\u003e").replace(/&/g, "\\u0026").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
 function sheetOnly(sheet) { const s = Object.assign({}, sheet); delete s.lede; delete s.description; return s; }
 function buildPage(starter, sheet) {
   const title = sheet.title || "Sheet";
-  const json = scriptJson(sheetOnly(sheet), 1);
+  const json = dataJson(sheetOnly(sheet), 1);
   const swaps = [ // each a function, so no $ in a cell is read as a pattern
     [/<title>[\s\S]*?<\/title>/, () => `<title>${escText(title)}</title>`],
     [/<meta name="description" content="[^"]*">/, () => `<meta name="description" content="${escText(sheet.description || title)}">`],
     [/<h1 data-ss-id="title">[\s\S]*?<\/h1>/, () => `<h1 data-ss-id="title">${escText(title)}</h1>`],
     [/<p class="lede" data-ss-id="lede">[\s\S]*?<\/p>/, () => `<p class="lede" data-ss-id="lede">${escText(sheet.lede || "")}</p>`],
-    [/(<script type="application\/json" id="sheet-data">)[\s\S]*?(<\/script>)/, (m, a, b) => `${a}\n${json}\n${b}`],
+    [/(<pre hidden id="sheet-data" data-ss-id="sheet-data">)[\s\S]*?(<\/pre>)/, (m, a, b) => `${a}\n${json}\n${b}`],
   ];
   let page = starter;
   for (const [re, to] of swaps) {
@@ -68,7 +71,7 @@ function workerFile(starter) {
 }
 // One live edit: the delta block, replaced on every open tab; the page's listener draws it.
 const deltaEdit = (tab, cells) => ({ anchor: "sheet-delta", op: "replace",
-  html: `<script type="application/json" id="sheet-delta" data-ss-id="sheet-delta">${scriptJson({ tab, cells, at: Date.now() })}</script>` });
+  html: `<pre hidden id="sheet-delta" data-ss-id="sheet-delta">${dataJson({ tab, cells, at: Date.now() })}</pre>` });
 // What isn't a cell: when it changes, the whole page goes again.
 function frame(sheet) { const s = JSON.parse(JSON.stringify(sheet)); delete s.saved_at; (s.tabs || []).forEach((t) => delete t.cells); return JSON.stringify(s); }
 // The cells that differ from what was sent, by tab, in batches of at most BATCH (null clears a cell).
@@ -178,7 +181,12 @@ function engine() {
   vm.runInNewContext(m[1], box);
   return box.module.exports;
 }
-module.exports = { buildPage, workerFile, deltaEdit, batches, frame, assemble, fill, shiftFormula, checkSheet, scriptJson, escText, engine };
+// The sheet as a version holds it: saved_at set, so the page names the version's time.
+const stamped = (sheet) => Object.assign({}, sheet, { saved_at: sheet.saved_at || new Date().toISOString().replace(/\.\d+Z$/, "Z") });
+// The sheet's data in a page: the text of its data block, parsed; null when there is none.
+function pageData(page) { const m = DATA.exec(page); return m ? JSON.parse(m[1]) : null; }
+const DATA = /<pre hidden id="sheet-data" data-ss-id="sheet-data">([\s\S]*?)<\/pre>/;
+module.exports = { buildPage, workerFile, deltaEdit, batches, frame, assemble, fill, shiftFormula, checkSheet, dataJson, escText, engine, stamped, pageData };
 if (require.main !== module) return;
 
 // --- the commands ---
@@ -213,12 +221,11 @@ function rulesFirst(sheet, verb) {
   die(`${verb} refused: rows come after the rules for them, printed above. Read them, then ${verb} again`, 1);
 }
 function rulesAfter() { if (fs.existsSync(rulesFile)) return; fs.writeFileSync(rulesFile, "push"); console.log("\n" + fs.readFileSync(BUILD, "utf8")); }
-function publish(sheet, message) {
-  const s = Object.assign({}, sheet, { saved_at: sheet.saved_at || new Date().toISOString().replace(/\.\d+Z$/, "Z") });
+const pageOf = (sheet) => buildPage(fs.readFileSync(STARTER, "utf8"), stamped(sheet));
+function publish(page, message) {
   fs.mkdirSync(WORK, { recursive: true });
-  const starter = fs.readFileSync(STARTER, "utf8");
-  fs.writeFileSync(path.join(WORK, "index.html"), buildPage(starter, s));
-  fs.writeFileSync(path.join(WORK, "sheet-worker.js"), workerFile(starter));
+  fs.writeFileSync(path.join(WORK, "index.html"), page);
+  fs.writeFileSync(path.join(WORK, "sheet-worker.js"), workerFile(fs.readFileSync(STARTER, "utf8")));
   run(["deploy", WORK, "--space", space, "-m", message]);
   fs.writeFileSync(pubFile, new Date().toISOString());
 }
@@ -260,7 +267,7 @@ if (cmd === "start") {
   // Read the space, so the first save is built on it; a sheet already there becomes data.json.
   try { run(["read", space, "-o", WORK]); } catch (e) { console.error(`read: ${why(e)}`); }
   const page = fs.existsSync(path.join(WORK, "index.html")) ? fs.readFileSync(path.join(WORK, "index.html"), "utf8") : "";
-  const m = /<script type="application\/json" id="sheet-data">([\s\S]*?)<\/script>/.exec(page);
+  const m = DATA.exec(page);
   // An empty space shows the title and the named tabs at once, live only (nothing is saved): the sheet is coming.
   const words = page.replace(/<(script|style)[\s\S]*?<\/\1>/g, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
   if (!m && words.length < 200) {
@@ -288,13 +295,13 @@ if (cmd === "start") {
 function pushSheet(sheet, say) {
   const sent = fs.existsSync(sentFile) ? JSON.parse(fs.readFileSync(sentFile, "utf8")) : null;
   if (!sent || frame(sent) !== frame(sheet)) {
-    const page = buildPage(fs.readFileSync(STARTER, "utf8"), sheet);
+    const page = pageOf(sheet);
     // A page and a status can't go in one call (the API takes one or the other); a batch and a status can.
     try { const a = live({ html: page }); console.log(`pushed the whole page (${page.length} bytes${seen(a)}, ${took()})`); }
     catch (e) { console.error(`page push refused: ${why(e)}. Nothing is marked sent: push again`); return false; }
     fs.writeFileSync(sentFile, JSON.stringify(sheet));
     if (say) status(say);
-    return firstSave(sheet, say);
+    return firstSave(sheet, say, page);
   }
   const bs = batches(sent, sheet);
   if (!bs.length) { if (say) status(say); console.log("no cell changed since the last push"); return firstSave(sheet, say); }
@@ -312,9 +319,9 @@ function pushSheet(sheet, say) {
 }
 // What's pushed (sent.json) and whether it's saved (published) are kept apart. Until the sheet has been saved once,
 // every push tries the save again, so a later visitor sees it, and fails while it can't.
-function firstSave(sheet, say) {
+function firstSave(sheet, say, page) {
   if (fs.existsSync(pubFile)) return true;
-  try { publish(sheet, say || "The sheet's tabs and headers"); console.log(`saved it, so a later visitor sees it too (${took()})`); return true; }
+  try { publish(page || pageOf(sheet), say || "The sheet's tabs and headers"); console.log(`saved it, so a later visitor sees it too (${took()})`); return true; }
   catch (e) { console.error(`save refused: ${why(e)}. Open tabs have it, but it isn't saved yet: push again`); return false; }
 }
 
@@ -335,7 +342,11 @@ if (cmd === "save") {
   let sheet;
   try { sheet = assemble(DIR); } catch (e) { die(`save: ${e.message}`, 1); }
   rulesFirst(sheet, "save");
-  try { publish(sheet, message); } catch (e) { die(`save refused: ${why(e)}`, 1); }
+  // Open tabs are shown this version first, whole and in place, so when it is saved they already show it.
+  const page = pageOf(sheet);
+  try { const a = live({ html: page }); fs.writeFileSync(sentFile, JSON.stringify(sheet)); console.log(`pushed the whole page (${page.length} bytes${seen(a)}, ${took()})`); }
+  catch (e) { console.error(`page push refused: ${why(e)}`); }
+  try { publish(page, message); } catch (e) { die(`save refused: ${why(e)}`, 1); }
   console.log(`saved: ${message} (${took()})`);
   // Open tabs get what changed since the last push: highlights, charts, last cells. If that fails, the version
   // is saved but people watching don't see it yet: say so, and fail, so push is run again.
