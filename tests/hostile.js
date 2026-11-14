@@ -377,7 +377,7 @@ module.exports = function ({ E, test, script, within, ROOT }) {
     fs.writeFileSync(path.join(f.dir, "w", "cells", "01-rows.json"), JSON.stringify({ tab: "Budget", cells: { A2: "Rent", A3: "</pre><img src=x onerror=alert(1)>" } }));
     assert.strictEqual(f.run("push", "Budget: 2 lines in").status, 0); // a batch, not a page
     assert.strictEqual(livePages(f).length, 1);
-    const r = f.run("save", "The budget", "Done");
+    const r = f.run("save", "The budget", "Done"); // a line after the message, as the step once asked for, sends nothing
     assert.strictEqual(r.status, 0, r.stdout + r.stderr);
     const pages = livePages(f), lines = f.calls().split("\n");
     assert.strictEqual(pages.length, 2);
@@ -386,6 +386,16 @@ module.exports = function ({ E, test, script, within, ROOT }) {
     const pushedAt = lines.findIndex((l) => l.startsWith('{"space_id"') && l.includes(JSON.stringify(pages[1]).slice(1, 200)));
     assert.ok(pushedAt >= 0 && pushedAt < lines.findIndex((l, i) => i > pushedAt && l.startsWith("deploy ")), "the page went live after the save");
     assert.match(r.stdout, /no cell changed since the last push/);
+    // The version is the run's last word: open tabs take the work card down on it, and a status after it puts it back.
+    const savedAt = lines.map((l) => l.startsWith("deploy ")).lastIndexOf(true);
+    assert.deepStrictEqual(lines.slice(savedAt + 1).filter((l) => l.trim()), [], "something was sent after the save");
+  });
+  test("sheet.js: a refused save exits non-zero and sends no status, so nothing on screen says it's done", () => {
+    const f = folder(["deploy"]);
+    const r = f.run("save", "The budget");
+    assert.notStrictEqual(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stderr, /save refused/);
+    assert.doesNotMatch(f.calls(), /--status/);
   });
   // The CLI keeps the version a folder was last read or saved as under the path it was given, so a folder
   // named two ways (/tmp/x and /private/tmp/x on a Mac) had no base on its first save, which was refused.

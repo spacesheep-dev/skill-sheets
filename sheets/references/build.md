@@ -80,8 +80,9 @@ You've pushed the frame, and `start` named the tabs. Now:
    prints each cell you name. Check two totals against what the rows should give. To fix
    a batch, write its file again and push.
 4. **Add highlights (`rules`) and charts** to `data.json` once their rows are in.
-5. **Save:** `sheet.js save "<what the sheet is>" "<one line: done>"`. It saves the
-   version and shows the last changes on open tabs. Then reply. For a new sheet leave
+5. **Save:** `sheet.js save "<what the sheet is>"`. It saves the version and shows the
+   last changes on open tabs, which then say it's done. Push nothing after it: a status
+   would put "working on this page" back up. Then reply. For a new sheet leave
    `edited` as `{}`, and leave out `before` and `change_note`.
 
 When the sheet is a plan someone will follow, give it a place to enter what really

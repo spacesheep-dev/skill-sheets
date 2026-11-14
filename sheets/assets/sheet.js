@@ -15,7 +15,8 @@
 //                                                   highlights or charts change, the whole page (also saved, so
 //                                                   a later visitor sees it); otherwise only the cells that
 //                                                   changed, in batches of at most 500, each outlined as it lands.
-//   node sheet.js -C <folder> save "<message>" ["<status>"]  the whole sheet saved as a version; the status after.
+//   node sheet.js -C <folder> save "<message>"      the whole sheet saved as a version: the end of the run, so no
+//                                                   status after it (it would put the work card back up)
 //   node sheet.js -C <folder> check [Tab!A1 ...]    the starter's own engine on the sheet: error cells, unknown
 //                                                   functions, and the value of each cell named. Only reads.
 //
@@ -340,7 +341,6 @@ if (cmd === "push") {
 if (cmd === "save") {
   const message = plain("message", rest[0]);
   if (!message) die("save: give a message: what this version is");
-  const say = plain("status", rest[1]);
   let sheet;
   try { sheet = assemble(DIR); } catch (e) { die(`save: ${e.message}`, 1); }
   rulesFirst(sheet, "save");
@@ -350,9 +350,10 @@ if (cmd === "save") {
   catch (e) { console.error(`page push refused: ${why(e)}`); }
   try { publish(page, message); } catch (e) { die(`save refused: ${why(e)}`, 1); }
   console.log(`saved: ${message} (${took()})`);
-  // Open tabs get what changed since the last push: highlights, charts, last cells. If that fails, the version
-  // is saved but people watching don't see it yet: say so, and fail, so push is run again.
-  if (!pushSheet(sheet, say)) die("saved, but open tabs didn't get the last changes: run push", 1);
+  // The save ends the run: open tabs say Done and take the work card down. A status after it would put the card
+  // back up for hours, so none is sent. Open tabs still get what changed since the last push: highlights, charts,
+  // last cells. If that fails, the version is saved but people watching don't see it yet: say so, and fail.
+  if (!pushSheet(sheet, "")) die("saved, but open tabs didn't get the last changes: run push, with no status", 1);
   process.exit(0);
 }
 
