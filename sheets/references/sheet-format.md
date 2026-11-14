@@ -74,8 +74,8 @@ Leave empty cells out of `cells`.
 
 With no format, numbers show as they are. Formats apply only to numbers, so a header row
 of words in a `money` column is fine. A date, or a formula that gives one (`DATE`, `EDATE`,
-`EOMONTH`, `TODAY`), shows as `date` unless the cell itself says otherwise. Month headers
-are typed dates with `"fmt": "month"`: `"B1": {"v": "2026-01-01", "fmt": "month"}`.
+`EOMONTH`, `TODAY`), shows as `date` unless the cell itself says otherwise. A header that
+is a date is a typed date with its format: `{"v": "<date>", "fmt": "month"}`.
 
 ## Highlight styles
 

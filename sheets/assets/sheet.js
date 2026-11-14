@@ -21,7 +21,7 @@
 //
 // The agent writes only data.json (the sheet: tabs, header cells, formats, drop-downs, highlights, charts,
 // plus "lede" and "description" for the page) and cells/NN-<what>.json, one batch each:
-// {"tab": "Transactions", "cells": {"A2": "2026-11-03", "B2": "Stock", "C2": 300}}. This script builds the
+// {"tab": "<tab>", "cells": {"A2": "2026-11-03", "B2": "<text>", "C2": 300}}. This script builds the
 // page from the starter; cell text goes into it as JSON with <, > and & escaped, never as HTML.
 "use strict";
 const fs = require("fs");
