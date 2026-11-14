@@ -110,6 +110,21 @@ module.exports = function ({ E, test, script, PAGE, ROOT }) {
     const good = S.checkSheet(sheetFor("2026-08-03"), E).fails;
     assert.ok(!good.some((f) => /^zeros: Summary!B/.test(f)), good.join("; "));
   });
+  test("month headers made by EDATE show as dates, even in a money column", () => {
+    const tab = { name: "Summary", freeze: 1, cols: [{}, {}, {}, { fmt: "money" }, { fmt: "money" }, { fmt: "money" }],
+      cells: Object.assign({ D1: "2026-09-01", D2: 120 }, S.fill({ "E1:F1": "=EDATE(D1,1)", "G1:H1": { v: "=EOMONTH(F1,0)", fmt: "month" } }, "t")) };
+    const b = new E.Book({ locale: "en-GB", currency: "GBP", tabs: [tab] }), raw = b.raw.summary;
+    const shown = (a) => E.fmtValue(b.value("Summary", a), E.cellFmt(tab, a, raw[a], b.input("Summary", a)), { locale: "en-GB", currency: "GBP" });
+    assert.deepStrictEqual(["D1", "E1", "F1", "G1", "H1", "D2"].map(shown), ["1 Sept 2026", "1 Oct 2026", "1 Nov 2026", "Nov 2026", "Nov 2026", "£120"]);
+    assert.strictEqual(raw.H1.v === undefined ? tab.cells.H1.v : raw.H1.v, "=EOMONTH(G1,0)"); // a {v, fmt} cell fills down too
+    assert.strictEqual(tab.cells.H1.fmt, "month");
+  });
+  test("the legend says nothing until someone else has edited a cell on the tab", () => {
+    const ui = script("sheet-ui");
+    assert.match(ui, /if \(peer\) \{ var p = el\("span"\);[^\n]*Edited by someone else/);
+    assert.match(ui, /lg\.hidden = !lg\.childNodes\.length/);
+    assert.match(PAGE, /\.legend\[hidden\]\{display:none\}/);
+  });
   test("push sends only the changed cells, in batches of at most 500", () => {
     const was = sheet(), now = sheet();
     for (let r = 2; r <= 1201; r++) now.tabs[0].cells["A" + r] = "row " + r;

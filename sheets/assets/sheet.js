@@ -92,8 +92,8 @@ function fill(cells, where) {
     const c0 = colNum(m[1]), r0 = +m[2], c1 = colNum(m[3]), r1 = +m[4];
     if ((c0 !== c1 && r0 !== r1) || c1 < c0 || r1 < r0) throw new Error(`${where}: ${k} must be one column or one row, top to bottom or left to right`);
     for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
-      const s = typeof v === "string" && v.startsWith("=") ? shiftFormula(v, r - r0, c - c0) : v;
-      out[colName(c) + r] = s;
+      const f = (x) => (typeof x === "string" && x.startsWith("=") ? shiftFormula(x, r - r0, c - c0) : x);
+      out[colName(c) + r] = v && typeof v === "object" ? Object.assign({}, v, { v: f(v.v) }) : f(v); // {"v": "=…", "fmt": …} fills too
     }
   }
   return out;
@@ -292,7 +292,7 @@ if (cmd === "check") {
     const bang = want.lastIndexOf("!"), tab = bang < 0 ? sheet.tabs[0].name : want.slice(0, bang).replace(/^'|'$/g, ""), a = want.slice(bang + 1).toUpperCase();
     const t = sheet.tabs.find((x) => x.name.toLowerCase() === tab.toLowerCase());
     const v = book.value(tab, a);
-    console.log(`${tab}!${a} = ${E.fmtValue(v, E.cellFmt(t || {}, a, (book.raw[tab.toLowerCase()] || {})[a]), sheet)}`);
+    console.log(`${tab}!${a} = ${E.fmtValue(v, E.cellFmt(t || {}, a, (book.raw[tab.toLowerCase()] || {})[a], book.input(tab, a)), sheet)}`);
   }
   console.log(`${sheet.tabs.length} tabs, ${cells} cells, ${formulas} formulas`);
   console.log(fails.length ? fails.slice(0, 40).join("\n") : "all pass: no error cells, every function known, no all-zero column");

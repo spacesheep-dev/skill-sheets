@@ -6,13 +6,15 @@ description: Use when someone wants a spreadsheet that people will keep working 
 # Sheets
 
 **First, before you read on:** run `node <this skill's folder>/assets/sheet.js -C <folder>
-start <link>` with the space the person gave you (`start --new "<title>"` with none), where
-`<folder>` is an empty folder you work in. It puts a status on the space, so the person
-sees you've started. Then read the rest.
+start <link> && cat <this skill's folder>/references/sheet-format.md`, with the space the
+person gave you (`start --new "<title>"` with none), where `<folder>` is an empty folder
+you work in. It puts a status and an empty grid on the space, so the person sees you've
+started, and prints the format you write. Then read the rest.
 
-**The person watches the sheet fill in.** A status within 10 seconds, the tabs and headers
-on screen within 30, every row in by 2 minutes, saved by 3. Write a part, push it, write
-the next: never the whole sheet before the first push.
+**The person watches the sheet fill in.** A status within 10 seconds, the tabs and their
+formatted headers within 30, something new at least every 45 seconds, saved by 3 minutes.
+Plan one tab, write it, push it, then plan the next: never plan the whole sheet, or
+all its rows, before the first rows go in.
 
 You build and change spreadsheets that live in a space: tabs, cells, formulas that
 recalculate, drop-downs, checkboxes, highlights and charts. Everyone signed in who can
@@ -74,30 +76,33 @@ thing instead.
 
 ## Build a new sheet
 
-1. **Start** (the first lines above), before anything else.
+1. **Start** (the first lines above), with the format reference in the same command.
 2. **Read the ask.** Ask nothing first: build, and name your guesses in the reply. Ask
    only when the ask is too vague to build anything useful and the person can answer
    while you wait; with no way to answer (a run nobody watches), guess. Use the person's
    own rows, numbers and names when they give them.
-3. **Settle the layout before the first push:** which tabs, which columns, where each
-   table starts. Give each thing people update its own tab (one per team, one list of
-   tasks), and put what people only read on its own tab ("Summary", "By month"). Inputs on
-   the left, calculated columns on the right, one header row, frozen. Tab names are short
-   and plain, at most 31 characters, with none of `[ ] : * ? / \`. Moving a table after
-   the first push sends the whole page again.
-4. **Push the frame within 30 seconds,** before you read any reference: it needs none. One
-   short Write of `data.json` with `title`, `lede` (one or two sentences: what the sheet
-   holds, who updates it, that the figures are examples) and each tab's `name`, `freeze: 1`
-   and header cells, such as `{"name": "Budget", "freeze": 1, "cells": {"A1": "Category",
-   "B1": "Monthly budget"}}`. Then `sheet.js push "Setting up <the tabs>"`.
-   Then read `references/sheet-format.md` and add to `data.json` what makes the rows look
-   right as they land: `description`, `currency`, `locale`, and each tab's `cols` (widths
-   and number formats), `lists` and `checks`. Push again: the page redraws in a second.
-5. **Push the rows in batches.** Each batch is one Write of `cells/01-<what>.json`, then
-   `02-…` and on: `{"tab": "Transactions", "cells": {"A2": "2026-11-03", "B2": "Stock",
-   "C2": 300}}`, one tab and at most 500 cells. Then `sheet.js push "<what is landing>"`,
-   such as "Transactions: 24 example rows". Inputs first, then the formulas that read
-   them, then the summaries. Each batch shows on every open tab within a second, outlined.
+3. **Push the frame, formatted, within 30 seconds of the start.** Decide only the layout:
+   which tabs, which columns, where each table starts, each column's width and format. Don't
+   work out rows, amounts or formulas yet. Give each thing people update its own tab (one
+   per team, one list of tasks), and put what people only read on its own tab ("Summary",
+   "By month"). Inputs on the left, calculated columns on the right, one header row,
+   frozen. Tab names are short and plain, at most 31 characters, with none of
+   `[ ] : * ? / \`. Moving a table after this push sends the whole page again.
+   Write `data.json` and push it in one command: `title`, `lede` (one or two sentences:
+   what the sheet holds, who updates it, that the figures are examples), `description`,
+   `currency`, `locale`, and each tab's `name`, `freeze: 1`, `cols` (widths and formats),
+   header cells, `lists` and `checks`. Then `sheet.js push "Writing <the first tab>"`.
+   Headers that are dates carry their format, so they never show as numbers:
+   `"D1": {"v": "2026-09-01", "fmt": "month"}, "E1:F1": {"v": "=EDATE(D1,1)", "fmt": "month"}`.
+4. **Then one tab at a time, inputs first, summaries last.** Work out only this tab's
+   rows, write them as one batch, and push it in the same command. The status says what
+   landed and what you write next: `sheet.js push "Budget: 14 lines in. Writing
+   Transactions next"`. Keep each step under 45 seconds: a tab with many rows goes in two
+   or three batches (a month at a time, say), each pushed as it's written. Only then plan
+   the next tab.
+5. **A batch** is one file, `cells/01-<what>.json`, then `02-…` and on: `{"tab":
+   "Transactions", "cells": {"A2": "2026-11-03", "B2": "Stock", "C2": 300}}`, one tab and
+   at most 500 cells. Each shows on every open tab within a second, outlined.
    - Write dates as `"2027-03-01"`, and numbers plain: no currency sign, no thousands
      commas. Every number that comes from other cells is a formula.
    - **Fill a formula down with one key:** `"F2:F200": "=IF($C2=\"\",\"\",C2*1.2)"` is
@@ -280,10 +285,11 @@ changed and point to "What changed in this version". Never paste the JSON, and s
 - `assets/sheet.js`: the one script you run. Its header lists each step; you don't need
   to read it.
 - `references/sheet-format.md`: the JSON, field by field, with a full small example. Read
-  it right after the first push.
+  it with `start`, before the first push.
 - `references/functions.md`: every function the engine knows, with notes on Excel
   differences. Read it before you write formulas you haven't used here.
 - `references/examples.md`: three worked cases: a sheet from one ask, a change with its
-  record, and a cleaned import with a tracker. Read it when the ask is like one of them.
+  record, and a cleaned import with a tracker. Read it for a change or an import; for a
+  new sheet the steps above are enough.
 - `references/sheet-template.html`: the starter `sheet.js` builds every sheet from. Never
   read or copy it (only without a shell, as above).

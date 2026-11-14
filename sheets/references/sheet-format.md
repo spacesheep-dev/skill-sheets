@@ -72,8 +72,10 @@ Leave empty cells out of `cells`.
 | `date` | 1 Mar 2027 | `d mmm yyyy` |
 | `month` | Mar 2027 | `mmm yyyy` |
 
-With no format, numbers show as they are. Dates with no format show as `date`. Formats
-apply only to numbers, so a header row in a `money` column is fine.
+With no format, numbers show as they are. Formats apply only to numbers, so a header row
+of words in a `money` column is fine. A date, or a formula that gives one (`DATE`, `EDATE`,
+`EOMONTH`, `TODAY`), shows as `date` unless the cell itself says otherwise. For month
+headers give the cell `"fmt": "month"`: `"E1:F1": {"v": "=EDATE(D1,1)", "fmt": "month"}`.
 
 ## Highlight styles
 

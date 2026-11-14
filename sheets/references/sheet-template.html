@@ -61,6 +61,7 @@ table.grid{border-collapse:separate;border-spacing:0;font-variant-numeric:tabula
 .grid td.error{color:var(--bad-ink);font-weight:600}
 .grid td select{width:100%;min-height:30px;border:none;background:transparent;font:inherit}
 .grid td input[type=checkbox]{width:20px;height:20px;margin:0;vertical-align:middle}
+.legend[hidden]{display:none}
 .legend{display:flex;flex-wrap:wrap;gap:14px;font-size:13px;color:var(--muted);margin:8px 0}
 .legend i{display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:-2px;margin-right:5px}
 .delta{margin:14px 0;padding:12px 14px;border:1px solid var(--line);border-radius:8px;max-width:760px}.delta h2{font-size:16px;margin:0 0 4px}.delta p{margin:0 0 8px;color:var(--muted);font-size:14px}.delta table{border-collapse:collapse;font-size:14px;font-variant-numeric:tabular-nums}.delta td,.delta th{padding:4px 10px 4px 0;text-align:left;border-bottom:1px solid var(--line)}.delta td.n{text-align:right}
@@ -137,6 +138,7 @@ var SheetEngine = (function () {
   function serial(y, m, d) { return Math.round((Date.UTC(y, m - 1, d) - EPOCH) / 864e5); }
   function fromSerial(n) { var t = new Date(EPOCH + Math.floor(n) * 864e5); return { y: t.getUTCFullYear(), m: t.getUTCMonth() + 1, d: t.getUTCDate(), wd: t.getUTCDay() }; }
   var ISO = /^(\d{4})-(\d{2})-(\d{2})$/;
+  var DATEF = /^=\s*(DATE|EDATE|EOMONTH|TODAY|DATEVALUE|WORKDAY)\s*\(/i; // a formula that gives a date
 
   // --- tokens ---
   function tokenize(src) {
@@ -322,7 +324,7 @@ var SheetEngine = (function () {
     var t = this.raw[String(tabName).toLowerCase()]; if (!t) return null;
     var c = t[a]; if (!c) return null;
     var v = c.f !== undefined ? c.f : c.v;
-    if (typeof v === "string" && v.charAt(0) === "=" && v.length > 1) return { formula: v.slice(1) };
+    if (typeof v === "string" && v.charAt(0) === "=" && v.length > 1) return DATEF.test(v) ? { formula: v.slice(1), date: true } : { formula: v.slice(1) };
     if (typeof v === "string" && ISO.test(v)) return { value: num(v), date: true };
     return { value: v === undefined ? null : v };
   };
@@ -454,8 +456,9 @@ var SheetEngine = (function () {
     var sym = SYM[data.currency || "GBP"] || "";
     return { money: '"' + sym + '"#,##0', money2: '"' + sym + '"#,##0.00', int: "#,##0", num: "#,##0.00", pct: "0%", pct1: "0.0%", date: "d mmm yyyy", month: "mmm yyyy" }[fmt] || null;
   }
-  function cellFmt(tab, a, c) {
-    if (c && c.fmt) return c.fmt; var p = parseAddr(a); var col = (tab.cols || [])[p ? p.c - 1 : -1]; return (col && col.fmt) || null;
+  function cellFmt(tab, a, c, inp) { // the cell's own fmt; else a date shows as a date; else its column's
+    if (c && c.fmt) return c.fmt; var p = parseAddr(a); var col = (tab.cols || [])[p ? p.c - 1 : -1], f = (col && col.fmt) || null;
+    return inp && inp.date && f !== "date" && f !== "month" ? "date" : f;
   }
 
   // --- .xlsx: a stored (uncompressed) zip of SpreadsheetML parts ---
@@ -507,7 +510,7 @@ var SheetEngine = (function () {
       Object.keys(rows).map(Number).sort(function (p, q) { return p - q; }).forEach(function (r) {
         var cells = rows[r].sort(function (p, q) { return p.c - q.c; }).map(function (it) {
           var c = raw[it.a], inp = book.input(name, it.a), v = book.value(name, it.a);
-          var s = styleFor(cellFmt(tab, it.a, c) || (inp && inp.date ? "date" : null), !!(c.b || (freeze && r <= freeze && !inp.formula && typeof v === "string")));
+          var s = styleFor(cellFmt(tab, it.a, c, inp), !!(c.b || (freeze && r <= freeze && (inp.date || (!inp.formula && typeof v === "string")))));
           var sAttr = s ? ' s="' + s + '"' : "";
           if (inp && inp.formula !== undefined) {
             var f = "<f>" + x(xlFormula(inp.formula)) + "</f>";
@@ -546,7 +549,7 @@ var SheetEngine = (function () {
   }
   function csv(book, tabName) {
     var sz = book.size(tabName), lines = [];
-    for (var r = 1; r <= sz.rows; r++) { var row = []; for (var c = 1; c <= sz.cols; c++) { var v = book.value(tabName, addr(r, c)), inp = book.input(tabName, addr(r, c)), tab = book.tabs[tabName.toLowerCase()], f = cellFmt(tab, addr(r, c), (book.raw[tabName.toLowerCase()] || {})[addr(r, c)]) || (inp && inp.date ? "date" : null); var s = isErr(v) ? v.e : v === null ? "" : (typeof v === "number" && (f === "date" || f === "month")) ? (function (d) { return d.y + "-" + ("0" + d.m).slice(-2) + "-" + ("0" + d.d).slice(-2); })(fromSerial(v)) : str(v); row.push(/[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s); } lines.push(row.join(",")); }
+    for (var r = 1; r <= sz.rows; r++) { var row = []; for (var c = 1; c <= sz.cols; c++) { var v = book.value(tabName, addr(r, c)), inp = book.input(tabName, addr(r, c)), tab = book.tabs[tabName.toLowerCase()], f = cellFmt(tab, addr(r, c), (book.raw[tabName.toLowerCase()] || {})[addr(r, c)], inp); var s = isErr(v) ? v.e : v === null ? "" : (typeof v === "number" && (f === "date" || f === "month")) ? (function (d) { return d.y + "-" + ("0" + d.m).slice(-2) + "-" + ("0" + d.d).slice(-2); })(fromSerial(v)) : str(v); row.push(/[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s); } lines.push(row.join(",")); }
     return lines.join("\r\n") + "\r\n";
   }
   // Every error cell in the book, for the status line and the agent's own check.
@@ -650,10 +653,10 @@ if (typeof module !== "undefined") module.exports = SheetEngine;
       for (var cc = 1; cc <= cols; cc++) {
         var a = E.addr(r, cc), raw = book.raw[tname][a], v = book.value(tab.name, a), inp = book.input(tab.name, a);
         var td = el("td", { "data-cell": a, "data-ss-id": "c-" + slug(tab.name) + "-" + a.toLowerCase() });
-        var fmt = E.cellFmt(tab, a, raw) || (inp && inp.date ? "date" : null), cls = [];
+        var fmt = E.cellFmt(tab, a, raw, inp), cls = [];
         if (typeof v === "number") cls.push("num");
         if (E.isErr(v)) cls.push("error");
-        if (tab.freeze && r <= tab.freeze && typeof v === "string") cls.push("hdr");
+        if (tab.freeze && r <= tab.freeze && (typeof v === "string" || (inp && inp.date))) cls.push("hdr");
         var rc = ruleClass(tab, a); if (rc) cls.push(rc);
         var st = stampOf(tname, a); if (st && st === latest && st >= savedAt - 1000 && savedAt) cls.push("chg");
         if (raw && raw.by && raw.by !== "You") { cls.push("peer"); td.title = "Edited by " + raw.by; }
@@ -698,7 +701,7 @@ if (typeof module !== "undefined") module.exports = SheetEngine;
         if (!ob.raw[t.name.toLowerCase()] || !ob.raw[t.name.toLowerCase()][a]) return;
         var nv = book.value(t.name, a), ov = ob.value(t.name, a);
         if (JSON.stringify(nv) === JSON.stringify(ov)) return;
-        var p = E.parseAddr(a), head = book.value(t.name, E.addr(1, p.c)), rowName = book.value(t.name, E.addr(p.r, 1)), fmt = E.cellFmt(t, a, raw[a]);
+        var p = E.parseAddr(a), head = book.value(t.name, E.addr(1, p.c)), rowName = book.value(t.name, E.addr(p.r, 1)), fmt = E.cellFmt(t, a, raw[a], inp);
         out.push({ cell: t.name + "!" + a, label: [rowName, head].filter(function (x) { return typeof x === "string" && x; }).join(" · "), was: E.fmtValue(ov, fmt, data), now: E.fmtValue(nv, fmt, data) });
       });
     });
@@ -729,7 +732,9 @@ if (typeof module !== "undefined") module.exports = SheetEngine;
   function renderLegend() {
     var lg = document.getElementById("legend"); lg.textContent = "";
     if (data.change_note) { var s = el("span"); s.appendChild(el("i", { style: "box-shadow:inset 0 0 0 2px var(--chg)" })); s.appendChild(document.createTextNode("Changed in this version: " + data.change_note)); lg.appendChild(s); }
-    var p = el("span"); p.appendChild(el("i", { style: "box-shadow:inset 3px 0 0 var(--mine)" })); p.appendChild(document.createTextNode("Edited by someone else (hover or long-press for who)")); lg.appendChild(p);
+    var raw = book.raw[tabObj().name.toLowerCase()] || {}, peer = Object.keys(raw).some(function (a) { return raw[a] && raw[a].by && raw[a].by !== "You"; });
+    if (peer) { var p = el("span"); p.appendChild(el("i", { style: "box-shadow:inset 3px 0 0 var(--mine)" })); p.appendChild(document.createTextNode("Edited by someone else (hover or long-press for who)")); lg.appendChild(p); }
+    lg.hidden = !lg.childNodes.length;
   }
   function renderStatus() {
     var st = document.getElementById("status"), rep = E.report(book);
