@@ -10,33 +10,47 @@
 <style>
 :root{--ink:#1f2328;--muted:#52514a;--line:#d8dadd;--head:#f3f4f6;--sel:#1a5fd0;--chg:#b25e00;--mine:#0f7b55;
 --bad:#fde2e1;--bad-ink:#8a1c17;--warn:#fff1c2;--warn-ink:#6b4a00;--good:#dcf3e6;--good-ink:#11593a;--accent:#1a5fd0;
-font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink);background:#fff}
+--paper:#fff;--cell:#fff;--cell-hdr:#fafafa;--rule:#e5e7eb;--edge:rgba(31,35,40,.16);color-scheme:light dark;
+font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink);background:var(--paper)}
+/* Night: the same tokens, night values; nothing below names a colour of its own. */
+@media (prefers-color-scheme:dark){:root{--ink:#e6e8eb;--muted:#a9adb3;--line:#3a3f46;--head:#23272d;--sel:#7aa8ff;--chg:#f0a14a;--mine:#3fbf8c;
+--bad:#4a1f1d;--bad-ink:#ffb4ae;--warn:#463a12;--warn-ink:#ffd978;--good:#173a2a;--good-ink:#8fe0b5;--accent:#7aa8ff;
+--paper:#16181c;--cell:#1b1e23;--cell-hdr:#20242a;--rule:#2c3036;--edge:rgba(0,0,0,.55)}}
 *{box-sizing:border-box}
 body{margin:0;padding:0 clamp(12px,3vw,28px) 40px}
 header{padding:20px 0 8px}
 h1{font-size:clamp(22px,4vw,30px);line-height:1.2;margin:0 0 4px}
 .lede{color:var(--muted);margin:0 0 10px;max-width:70ch}
 .bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}
-.bar button{min-height:40px;padding:0 14px;border:1px solid var(--line);border-radius:8px;background:#fff;font:inherit;cursor:pointer}
+.bar button{min-height:40px;padding:0 14px;border:1px solid var(--line);border-radius:8px;background:var(--cell);color:var(--ink);font:inherit;cursor:pointer}
 .bar button:hover{border-color:var(--accent)}
 .status{font-size:13px;color:var(--muted)}
 .status.err{color:var(--bad-ink);font-weight:600}
 .tabs{display:flex;gap:4px;overflow-x:auto;border-bottom:1px solid var(--line);margin-top:6px}
 .tabs button{min-height:42px;padding:0 16px;border:1px solid transparent;border-bottom:none;border-radius:8px 8px 0 0;background:none;font:inherit;cursor:pointer;white-space:nowrap;color:var(--muted)}
-.tabs button[aria-selected=true]{background:#fff;border-color:var(--line);color:var(--ink);font-weight:600;margin-bottom:-1px}
+.tabs button[aria-selected=true]{background:var(--cell);border-color:var(--line);color:var(--ink);font-weight:600;margin-bottom:-1px}
 .fx{display:flex;gap:8px;align-items:center;margin:8px 0}
 .fx .addr{min-width:72px;font:600 13px ui-monospace,Menlo,monospace;color:var(--muted)}
-.fx input{flex:1;min-height:40px;padding:0 10px;border:1px solid var(--line);border-radius:8px;font:14px ui-monospace,Menlo,monospace}
+.fx input{flex:1;min-height:40px;padding:0 10px;border:1px solid var(--line);border-radius:8px;background:var(--cell);color:var(--ink);font:14px ui-monospace,Menlo,monospace}
 .fx input:disabled{background:var(--head)}
-.wrap{overflow:auto;max-height:70vh;border:1px solid var(--line);border-radius:8px}
+.gridbox{position:relative}
+.wrap{overflow:auto;max-height:70vh;border:1px solid var(--line);border-radius:8px;overscroll-behavior-x:contain}
+.gridbox::after{content:"";position:absolute;top:1px;right:1px;bottom:1px;width:32px;border-radius:0 8px 8px 0;background:linear-gradient(to right,transparent,var(--edge));pointer-events:none;opacity:0;transition:opacity .15s}
+.gridbox.more-right::after{opacity:1}
+.more{position:absolute;right:10px;top:7px;z-index:5;font:600 12px system-ui;color:var(--ink);background:var(--cell);border:1px solid var(--line);border-radius:999px;padding:3px 10px;pointer-events:none;display:none}
+.gridbox.more-right .more{display:block}
 table.grid{border-collapse:separate;border-spacing:0;font-variant-numeric:tabular-nums}
 .grid th,.grid td{border-right:1px solid var(--line);border-bottom:1px solid var(--line);padding:0 8px;height:34px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:320px}
 .grid thead th{position:sticky;top:0;background:var(--head);z-index:2;font:600 12px system-ui;color:var(--muted);text-align:center}
-.grid th.rn{position:sticky;left:0;background:var(--head);z-index:1;font:600 12px system-ui;color:var(--muted);min-width:40px;text-align:center}
+.grid th.rn{position:sticky;left:0;background:var(--head);z-index:1;font:600 12px system-ui;color:var(--muted);width:40px;min-width:40px;max-width:40px;text-align:center}
 .grid thead th.rn{z-index:3}
-.grid td{background:#fff;cursor:cell}
+.grid thead th:nth-child(2){position:sticky;left:40px;z-index:3}
+.grid tbody td:first-of-type{position:sticky;left:40px;z-index:1;border-right-color:var(--muted)}
+.grid tr.frozen td:first-of-type{z-index:2}
+.grid tr.frozen th.rn{position:sticky;top:34px;left:0;z-index:3}
+.grid td{background:var(--cell);cursor:cell}
 .grid td.num{text-align:right}
-.grid td.hdr{font-weight:600;background:#fafafa}
+.grid td.hdr{font-weight:600;background:var(--cell-hdr)}
 .grid tr.frozen td{position:sticky;top:34px;z-index:1}
 .grid td.sel{outline:2px solid var(--sel);outline-offset:-2px}
 .grid td.chg{box-shadow:inset 0 0 0 2px var(--chg)}
@@ -55,7 +69,9 @@ table.grid{border-collapse:separate;border-spacing:0;font-variant-numeric:tabula
 .chart svg{width:100%;height:auto;max-width:860px}
 .keys{display:flex;flex-wrap:wrap;gap:12px;font-size:13px;color:var(--muted)}
 .keys i{display:inline-block;width:12px;height:12px;border-radius:2px;margin-right:4px;vertical-align:-1px}
-@media (max-width:600px){.grid th,.grid td{height:40px}.wrap{max-height:62vh}}
+@media (max-width:600px){.grid th,.grid td{height:40px}.grid tr.frozen td,.grid tr.frozen th.rn{top:40px}.wrap{max-height:62vh}
+.grid thead th:nth-child(2),.grid tbody td:first-of-type{min-width:0!important;max-width:42vw}}
+.chart svg text{fill:var(--muted)}.chart svg line{stroke:var(--rule)}
 </style>
 </head>
 <body>
@@ -71,7 +87,7 @@ table.grid{border-collapse:separate;border-spacing:0;font-variant-numeric:tabula
 </header>
 <nav class="tabs" id="tabs" role="tablist" aria-label="Tabs"></nav>
 <div class="fx"><span class="addr" id="addr">A1</span><input id="fx" aria-label="Selected cell" autocomplete="off" spellcheck="false" disabled></div>
-<div class="wrap" id="wrap"><table class="grid" id="grid"></table></div>
+<div class="gridbox" id="gridbox"><div class="wrap" id="wrap"><table class="grid" id="grid"></table></div><span class="more" aria-hidden="true">More columns →</span></div>
 <div class="legend" id="legend"></div>
 <section class="delta" id="delta" data-ss-id="what-changed" hidden><h2>What changed in this version</h2><p id="delta-note"></p><table id="delta-table"></table></section>
 <section class="charts" id="charts" aria-label="Charts"></section>
@@ -661,8 +677,12 @@ if (typeof module !== "undefined") module.exports = SheetEngine;
       tb.appendChild(tr);
     }
     g.appendChild(tb);
-    renderBar(); renderLegend(); renderCharts(); renderStatus(); renderDelta();
+    renderBar(); renderLegend(); renderCharts(); renderStatus(); renderDelta(); edges();
   }
+  // A shade and "More columns" at the right edge while columns are hidden past it.
+  function edges() { var w = document.getElementById("wrap"); document.getElementById("gridbox").classList.toggle("more-right", w.scrollLeft + w.clientWidth < w.scrollWidth - 2); }
+  document.getElementById("wrap").addEventListener("scroll", edges, { passive: true });
+  addEventListener("resize", edges);
   // Every formula cell whose value differs from the same sheet with data.before's old inputs.
   var deltaRows = null;
   function computeDelta() {
@@ -713,7 +733,7 @@ if (typeof module !== "undefined") module.exports = SheetEngine;
   }
   function renderStatus() {
     var st = document.getElementById("status"), rep = E.report(book);
-    var who = !state.loaded ? "Loading people's edits…" : state.failed ? "Couldn't load people's edits: showing the saved values." : state.signedIn ? "Edits save for everyone; others' edits show within 15 s." : "Sign in to edit cells.";
+    var who = !state.loaded ? "Loading people's edits…" : state.failed ? { copy: "A copy on this device: open the space's link to see people's edits.", refused: "People's edits can't load here, so this is the sheet as saved.", retry: "People's edits haven't loaded yet, so this is the sheet as saved. Trying again…" }[state.failed] : state.signedIn ? "Edits save for everyone; others' edits show within 15 s." : "Sign in to edit cells.";
     if (rep.errors.length) { st.textContent = "⚠ " + rep.errors.length + " cell" + (rep.errors.length > 1 ? "s show" : " shows") + " an error: " + rep.errors.slice(0, 5).join(", ") + ". " + who; st.className = "status err"; }
     else { st.textContent = "No error cells. " + who; st.className = "status"; }
   }
@@ -762,16 +782,23 @@ if (typeof module !== "undefined") module.exports = SheetEngine;
   function load(attempt) {
     fetch(API + "/records/" + COL).then(function (r) {
       if (r.status === 401) { if (!settled && attempt < 6) return setTimeout(function () { load(attempt + 1); }, 300 + attempt * 500); state.loaded = true; state.signedIn = false; render(); return; }
-      if (!r.ok) throw new Error(String(r.status));
+      if (!r.ok) { var er = new Error(String(r.status)); er.status = r.status; throw er; }
       return r.json().then(function (j) {
-        state.loaded = true; state.signedIn = true; state.me = true;
+        state.loaded = true; state.signedIn = true; state.me = true; state.failed = false; state.tries = 0;
         state.others = (j.records || []).filter(function (x) { return !x.mine; });
         var mine = (j.records || []).filter(function (x) { return x.mine; })[0];
         if (mine && mine.data && mine.data.edits) state.mine = mine.data.edits;
         (j.records || []).forEach(function (x) { if (!state.since || x.updated_at > state.since) state.since = x.updated_at; });
         render(); setTimeout(poll, state.poll);
       });
-    }).catch(function () { state.loaded = true; state.signedIn = false; state.failed = true; render(); });
+    }).catch(function (e) {
+      // A blip (a 429, a 5xx, the network) shouldn't leave the sheet read-only for the visit: try again,
+      // after 2, 4, 8 … seconds, at most a minute apart. A copy opened from disk, or a page the records
+      // service refuses (403, 404), can't get them by trying again.
+      state.loaded = true; state.signedIn = false; state.failed = location.protocol === "file:" ? "copy" : e && (e.status === 403 || e.status === 404) ? "refused" : "retry";
+      var keep = state.sel; render(); select(keep);
+      if (state.failed === "retry") { state.tries = (state.tries || 0) + 1; setTimeout(function () { load(0); }, Math.min(60000, 1000 * Math.pow(2, state.tries))); }
+    });
   }
   function poll() {
     if (document.hidden) return setTimeout(poll, state.poll);

@@ -72,11 +72,38 @@ function batches(sent, now) {
   }
   return out;
 }
+// Fill down or across: a key like "F2:F400" (one column) or "B5:M5" (one row) holds one value for every
+// cell in it. A formula is written for the first cell, and its relative references move with each cell,
+// as Excel's fill does: $ fixes a column or row; whole columns (B:B), text in quotes and tab names stay put.
+const colNum = (s) => [...s].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0);
+const colName = (n) => { let s = ""; for (; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + ((n - 1) % 26)) + s; return s; };
+function shiftFormula(f, dr, dc) {
+  return f.replace(/("[^"]*"|'[^']*'!?)|(\$?)([A-Z]{1,3})(\$?)(\d+)(?![\w(!])/g, (m, quoted, c$, col, r$, row, at, all) => {
+    if (quoted) return m;
+    if (/[A-Za-z0-9_.]$/.test(all.slice(0, at))) return m; // part of a longer name
+    return c$ + (c$ ? col : colName(colNum(col) + dc)) + r$ + (r$ ? row : String(+row + dr));
+  });
+}
+function fill(cells, where) {
+  const out = {};
+  for (const [k, v] of Object.entries(cells || {})) {
+    const m = /^([A-Z]{1,3})(\d+):([A-Z]{1,3})(\d+)$/.exec(k);
+    if (!m) { out[k] = v; continue; }
+    const c0 = colNum(m[1]), r0 = +m[2], c1 = colNum(m[3]), r1 = +m[4];
+    if ((c0 !== c1 && r0 !== r1) || c1 < c0 || r1 < r0) throw new Error(`${where}: ${k} must be one column or one row, top to bottom or left to right`);
+    for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
+      const s = typeof v === "string" && v.startsWith("=") ? shiftFormula(v, r - r0, c - c0) : v;
+      out[colName(c) + r] = s;
+    }
+  }
+  return out;
+}
 // data.json, then each cells/*.json in name order on top.
 function assemble(dir) {
   const read = (f) => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch (e) { throw new Error(`${path.relative(dir, f)}: ${e.code === "ENOENT" ? "missing" : "not valid JSON: " + e.message}`); } };
   const sheet = read(path.join(dir, "data.json"));
   if (!Array.isArray(sheet.tabs) || !sheet.tabs.length) throw new Error("data.json: it needs \"tabs\", at least one");
+  for (const t of sheet.tabs) t.cells = fill(t.cells, `data.json, ${t.name}`);
   const cdir = path.join(dir, "cells");
   const files = fs.existsSync(cdir) ? fs.readdirSync(cdir).filter((f) => f.endsWith(".json")).sort() : [];
   for (const f of files) {
@@ -84,10 +111,44 @@ function assemble(dir) {
     const tab = sheet.tabs.find((t) => t.name === b.tab);
     if (!tab) throw new Error(`cells/${f}: no tab named ${JSON.stringify(b.tab)} in data.json`);
     if (!b.cells || typeof b.cells !== "object") throw new Error(`cells/${f}: it needs "cells"`);
-    tab.cells = Object.assign(tab.cells || {}, b.cells);
-    for (const a of Object.keys(b.cells)) if (b.cells[a] === null) delete tab.cells[a];
+    const cells = fill(b.cells, `cells/${f}`);
+    tab.cells = Object.assign(tab.cells || {}, cells);
+    for (const a of Object.keys(cells)) if (cells[a] === null) delete tab.cells[a];
   }
   return sheet;
+}
+// What check finds: error cells, unknown functions, and formulas that all come to zero (a whole column of 3 or
+// more, or 4 or more in a row), which means the example rows never reach them: a month table that starts
+// before the examples' dates, a lookup on a name spelled another way.
+function checkSheet(sheet, E) {
+  const book = new E.Book(sheet), names = new Set(E.NAMES);
+  const fails = E.report(book).errors.map((e) => `error cell: ${e}`);
+  let formulas = 0, cells = 0;
+  for (const t of sheet.tabs) {
+    const cols = {};
+    for (const [a, c] of Object.entries(t.cells || {})) {
+      cells++;
+      const f = typeof c === "string" ? c : c && typeof c.v === "string" ? c.v : "";
+      if (!f.startsWith("=")) continue;
+      formulas++;
+      for (const m of f.matchAll(/([A-Za-z][A-Za-z0-9.]*)\s*\(/g)) if (!names.has(m[1].toUpperCase().replace(/^_XLFN\./, ""))) fails.push(`unknown function ${m[1]} in ${t.name}!${a}`);
+      const p = E.parseAddr(a), v = book.value(t.name, a);
+      if (p && typeof v === "number") (cols[p.c] = cols[p.c] || []).push({ r: p.r, v });
+    }
+    for (const [c, list] of Object.entries(cols)) {
+      list.sort((x, y) => x.r - y.r);
+      const col = E.colName(+c), all = list.length >= 3 && list.every((x) => x.v === 0);
+      // runs of zeros in next rows: the whole column (3 or more), or 4 or more in a row inside it
+      const runs = all ? [list] : [];
+      if (!all) for (let i = 0; i < list.length;) {
+        let j = i; while (j < list.length && list[j].v === 0 && (j === i || list[j].r === list[j - 1].r + 1)) j++;
+        if (j - i >= 4) runs.push(list.slice(i, j));
+        i = Math.max(j, i + 1);
+      }
+      for (const run of runs) fails.push(`zeros: ${t.name}!${col}${run[0].r}:${col}${run[run.length - 1].r} (${run.length} formulas) all come to 0: the example rows don't reach them`);
+    }
+  }
+  return { fails, formulas, cells, book };
 }
 function engine() {
   const m = /<script id="sheet-engine">([\s\S]*?)<\/script>/.exec(fs.readFileSync(STARTER, "utf8"));
@@ -95,7 +156,7 @@ function engine() {
   vm.runInNewContext(m[1], box);
   return box.module.exports;
 }
-module.exports = { buildPage, deltaEdit, batches, frame, assemble, scriptJson, escText, engine };
+module.exports = { buildPage, deltaEdit, batches, frame, assemble, fill, shiftFormula, checkSheet, scriptJson, escText, engine };
 if (require.main !== module) return;
 
 // --- the commands ---
@@ -119,12 +180,13 @@ const status = (text) => { try { run(["live", "push", "--space-id", space, "--st
 let space = (fs.existsSync(path.join(ST, "space")) ? fs.readFileSync(path.join(ST, "space"), "utf8") : "").trim();
 if (cmd !== "start" && cmd !== "check" && !UUID.test(space)) die(`${cmd}: no space yet; run start first, in this folder`);
 const WORK = path.join(ST, "work");
-const sentFile = path.join(ST, "sent.json");
+const sentFile = path.join(ST, "sent.json"), pubFile = path.join(ST, "published");
 function publish(sheet, message) {
   const s = Object.assign({}, sheet, { saved_at: sheet.saved_at || new Date().toISOString().replace(/\.\d+Z$/, "Z") });
   fs.mkdirSync(WORK, { recursive: true });
   fs.writeFileSync(path.join(WORK, "index.html"), buildPage(fs.readFileSync(STARTER, "utf8"), s));
   run(["deploy", WORK, "--space", space, "-m", message]);
+  fs.writeFileSync(pubFile, new Date().toISOString());
 }
 
 if (cmd === "start") {
@@ -158,68 +220,66 @@ if (cmd === "start") {
     const sheet = JSON.parse(m[1]);
     fs.writeFileSync(path.join(DIR, "data.json"), JSON.stringify(sheet, null, 1));
     fs.writeFileSync(sentFile, JSON.stringify(sheet));
+    fs.writeFileSync(pubFile, "read");
     console.log("the space holds a sheet: its data is in data.json");
   } else console.log("the space holds no sheet yet: write data.json, then push");
   console.log(`space: ${space} (${took()})`);
   process.exit(0);
 }
 
-if (cmd === "push") {
-  const say = plain("status", rest[0]) || "";
-  let sheet;
-  try { sheet = assemble(DIR); } catch (e) { die(`push: ${e.message}`, 1); }
+// The sheet on every open tab: the whole page when its frame changed (the first push is also saved, so a
+// later visitor sees it), else only the changed cells, in batches. The status goes with the push.
+function pushSheet(sheet, say) {
   const sent = fs.existsSync(sentFile) ? JSON.parse(fs.readFileSync(sentFile, "utf8")) : null;
   if (!sent || frame(sent) !== frame(sheet)) {
     const page = buildPage(fs.readFileSync(STARTER, "utf8"), sheet);
-    try { const a = live({ html: page }); console.log(`pushed the whole page (${page.length} bytes${seen(a)}, ${took()})`); }
+    try { const a = live(Object.assign({ html: page }, say ? { status: say.slice(0, 200) } : {})); console.log(`pushed the whole page (${page.length} bytes${seen(a)}, ${took()})`); }
     catch (e) { console.error(`page push refused: ${why(e)}`); }
-    if (say) status(say);
-    try { publish(sheet, say || "The sheet's tabs and headers"); console.log(`saved it, so a later visitor sees it too (${took()})`); }
-    catch (e) { console.error(`save refused: ${why(e)}`); }
+    if (!fs.existsSync(pubFile)) {
+      try { publish(sheet, say || "The sheet's tabs and headers"); console.log(`saved it, so a later visitor sees it too (${took()})`); }
+      catch (e) { console.error(`save refused: ${why(e)}`); }
+    }
     fs.writeFileSync(sentFile, JSON.stringify(sheet));
-    process.exit(0);
+    return true;
   }
   const bs = batches(sent, sheet);
-  if (!bs.length) { if (say) status(say); console.log("no cell changed since the last push"); process.exit(0); }
+  if (!bs.length) { if (say) status(say); console.log("no cell changed since the last push"); return true; }
   let done = 0, last = {};
   for (const [i, b] of bs.entries()) {
     const line = bs.length > 1 ? `${say || "Writing cells"} (${i + 1} of ${bs.length})` : say;
     try { last = live(Object.assign({ edits: [deltaEdit(b.tab, b.cells)] }, line ? { status: line.slice(0, 200) } : {})); done += Object.keys(b.cells).length; }
-    catch (e) { console.error(`batch ${i + 1} refused: ${why(e)}`); process.exit(1); }
+    catch (e) { console.error(`batch ${i + 1} refused: ${why(e)}`); return false; }
     const was = JSON.parse(fs.readFileSync(sentFile, "utf8")), t = was.tabs.find((x) => x.name === b.tab);
     t.cells = Object.assign(t.cells || {}, b.cells); for (const a of Object.keys(b.cells)) if (b.cells[a] === null) delete t.cells[a];
     fs.writeFileSync(sentFile, JSON.stringify(was));
   }
   console.log(`pushed ${done} cell${done === 1 ? "" : "s"} in ${bs.length} batch${bs.length === 1 ? "" : "es"}${seen(last)} (${took()})`);
-  process.exit(0);
+  return true;
+}
+
+if (cmd === "push") {
+  const say = plain("status", rest[0]) || "";
+  let sheet;
+  try { sheet = assemble(DIR); } catch (e) { die(`push: ${e.message}`, 1); }
+  process.exit(pushSheet(sheet, say) ? 0 : 1);
 }
 
 if (cmd === "save") {
   const message = plain("message", rest[0]);
   if (!message) die("save: give a message: what this version is");
+  const say = plain("status", rest[1]);
   let sheet;
   try { sheet = assemble(DIR); } catch (e) { die(`save: ${e.message}`, 1); }
   try { publish(sheet, message); } catch (e) { die(`save refused: ${why(e)}`, 1); }
-  fs.writeFileSync(sentFile, JSON.stringify(sheet));
-  const say = plain("status", rest[1]);
-  if (say) status(say);
   console.log(`saved: ${message} (${took()})`);
+  pushSheet(sheet, say); // open tabs get what changed since the last push: highlights, charts, last cells
   process.exit(0);
 }
 
 if (cmd === "check") {
   let sheet;
   try { sheet = assemble(DIR); } catch (e) { die(`check: ${e.message}`, 1); }
-  const E = engine(), book = new E.Book(sheet), names = new Set(E.NAMES);
-  const fails = E.report(book).errors.map((e) => `error cell: ${e}`);
-  let formulas = 0, cells = 0;
-  for (const t of sheet.tabs) for (const [a, c] of Object.entries(t.cells || {})) {
-    cells++;
-    const f = typeof c === "string" ? c : c && typeof c.v === "string" ? c.v : "";
-    if (!f.startsWith("=")) continue;
-    formulas++;
-    for (const m of f.matchAll(/([A-Za-z][A-Za-z0-9.]*)\s*\(/g)) if (!names.has(m[1].toUpperCase().replace(/^_XLFN\./, ""))) fails.push(`unknown function ${m[1]} in ${t.name}!${a}`);
-  }
+  const E = engine(), { fails, formulas, cells, book } = checkSheet(sheet, E);
   for (const want of rest) {
     const bang = want.lastIndexOf("!"), tab = bang < 0 ? sheet.tabs[0].name : want.slice(0, bang).replace(/^'|'$/g, ""), a = want.slice(bang + 1).toUpperCase();
     const t = sheet.tabs.find((x) => x.name.toLowerCase() === tab.toLowerCase());
@@ -227,7 +287,7 @@ if (cmd === "check") {
     console.log(`${tab}!${a} = ${E.fmtValue(v, E.cellFmt(t || {}, a, (book.raw[tab.toLowerCase()] || {})[a]), sheet)}`);
   }
   console.log(`${sheet.tabs.length} tabs, ${cells} cells, ${formulas} formulas`);
-  console.log(fails.length ? fails.slice(0, 40).join("\n") : "all pass: no error cells, every function known");
+  console.log(fails.length ? fails.slice(0, 40).join("\n") : "all pass: no error cells, every function known, no all-zero column");
   process.exit(fails.length ? 1 : 0);
 }
 

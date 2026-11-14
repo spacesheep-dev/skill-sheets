@@ -1,8 +1,15 @@
 # The sheet's JSON block
 
 The space's whole sheet is one JSON object inside
-`<script type="application/json" id="sheet-data">`. It must stay valid JSON: no comments,
-no trailing commas, and double quotes everywhere.
+`<script type="application/json" id="sheet-data">`. With a shell you write it as
+`data.json` plus `cells/NN-<what>.json` batches, and `sheet.js` puts it in the page. It
+must stay valid JSON: no comments, no trailing commas, and double quotes everywhere.
+
+In `data.json` only, two more fields are the page's words, kept out of the block: `lede`
+(one or two sentences above the grid) and `description` (one line for links and search).
+In `data.json` and in a batch, a key may be one column or one row (`"F2:F200"`,
+`"B5:M5"`): its value goes in every cell of it, a formula with its relative references
+moved for each cell, as Excel's fill does.
 
 ## The top level
 

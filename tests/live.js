@@ -88,6 +88,28 @@ module.exports = function ({ E, test, script, PAGE, ROOT }) {
     assert.strictEqual(page.replace(/<script type="application\/json" id="sheet-data">[\s\S]*?<\/script>/, "").replace(/<title>.*<\/title>|<meta name="description"[^>]*>|<h1 data-ss-id="title">.*<\/h1>|<p class="lede" data-ss-id="lede">.*<\/p>/g, ""),
       PAGE.replace(/<script type="application\/json" id="sheet-data">[\s\S]*?<\/script>/, "").replace(/<title>.*<\/title>|<meta name="description"[^>]*>|<h1 data-ss-id="title">.*<\/h1>|<p class="lede" data-ss-id="lede">.*<\/p>/g, ""));
   });
+  test("fill-down moves relative references and keeps $, quotes and tab names", () => {
+    const f = S.fill({ "F2:F4": "=IF($C2=\"B2\",'Q1 plan'!B2*Budget!$B$2,SUM(C$1:C2))", "B6:D6": "=B5*2", A1: "Item" }, "t");
+    assert.deepStrictEqual(Object.keys(f), ["F2", "F3", "F4", "B6", "C6", "D6", "A1"]);
+    assert.strictEqual(f.F4, "=IF($C4=\"B2\",'Q1 plan'!B4*Budget!$B$2,SUM(C$1:C4))");
+    assert.strictEqual(f.D6, "=D5*2");
+    assert.throws(() => S.fill({ "A1:B2": 1 }, "t"), /one column or one row/);
+  });
+  test("a filled formula gives the same values as the same formula typed out", () => {
+    const typed = { name: "T", cells: { A1: 2, A2: 3, A3: 4, B1: "=A1*10", B2: "=A2*10", B3: "=A3*10" } };
+    const filled = { name: "T", cells: Object.assign({ A1: 2, A2: 3, A3: 4 }, S.fill({ "B1:B3": "=A1*10" }, "t")) };
+    const v = (t) => ["B1", "B2", "B3"].map((a) => new E.Book({ tabs: [t] }).value("T", a));
+    assert.deepStrictEqual(v(filled), v(typed));
+  });
+  test("check fails a summary whose rows all come to zero, and passes when the examples reach it", () => {
+    const months = {}, sheetFor = (txDate) => ({ tabs: [
+      { name: "Log", cells: { A1: "Date", B1: "Amount", A2: txDate, B2: 120, A3: txDate, B3: 80 } },
+      { name: "Summary", cells: Object.assign(months, S.fill({ A2: "=DATE(2026,6,1)", "A3:A7": "=EDATE(A2,1)", "B2:B7": "=SUMIFS(Log!B:B,Log!A:A,\">=\"&A2,Log!A:A,\"<\"&EDATE(A2,1))" }, "t")) }] });
+    const bad = S.checkSheet(sheetFor("2027-01-03"), E).fails;
+    assert.ok(bad.some((f) => /^zeros: Summary!B2:B7 \(6 formulas\)/.test(f)), bad.join("; "));
+    const good = S.checkSheet(sheetFor("2026-08-03"), E).fails;
+    assert.ok(!good.some((f) => /^zeros: Summary!B/.test(f)), good.join("; "));
+  });
   test("push sends only the changed cells, in batches of at most 500", () => {
     const was = sheet(), now = sheet();
     for (let r = 2; r <= 1201; r++) now.tabs[0].cells["A" + r] = "row " + r;
