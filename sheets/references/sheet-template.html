@@ -1077,9 +1077,9 @@ self.onmessage = function (e) {
   document.getElementById("dl-xlsx").onclick = function () { makeFile("xlsx", function (bytes) { download(base() + ".xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", bytes); }); };
   // The person's place in this browser tab (tab, cell, scroll, typing), kept as it changes and put back at start, so
   // a whole-page rewrite or a reload doesn't lose it. Where storage is blocked, the page starts fresh as before.
-  // The key is this sheet's address without a version's part (/v/<sha>/, where a save reloads the frame), so a save
-  // finds it; another space is another origin, and another sheet another address.
-  var PLACE = "sheet-place:" + location.pathname.replace(/^((?:\/s\/[^/]+)?)\/v\/[^/]+(?=\/)/, "$1").replace(/index\.html?$/, ""), placing = false, kept = null;
+  // The key is this sheet's address without a version's part (/v/<sha>/, where a save reloads the frame) and without
+  // a whole index file name, so a save finds it; another space is another origin, and another sheet another address.
+  var PLACE = "sheet-place:" + location.pathname.replace(/^((?:\/s\/[^/]+)?)\/v\/[^/]+(?=\/)/, "$1").replace(/(^|\/)index\.html?$/, "$1"), placing = false, kept = null;
   // The page scroll is put back once the sheet is at its full height (people's edits loaded and drawn); until then
   // the place keeps the scroll it is waiting for, not a shorter one the page allows so far.
   var wantPy = null;

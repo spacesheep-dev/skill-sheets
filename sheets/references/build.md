@@ -64,7 +64,9 @@ You've pushed the frame, and `start` named the tabs. Now:
    landed and what you write next: `sheet.js push "Budget: 14 lines in. Writing
    Transactions next"`. Keep each step under 45 seconds: a tab with many rows goes in two
    or three batches (a month at a time, say), each pushed as it's written. Only then plan
-   the next tab.
+   the next tab. A tab that needs working out goes in two steps: push its inputs first,
+   with what you're working out in the status (`push "<Tab>: inputs in. Working out
+   <what>"`), then push its formulas.
 2. **A batch** is one file, `cells/01-<what>.json`, then `02-…` and on: `{"tab":
    "Transactions", "cells": {"A2": "2026-11-03", "B2": "Stock", "C2": 300}}`, one tab and
    at most 500 cells. Each shows on every open tab within a second, outlined.
