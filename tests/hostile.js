@@ -243,7 +243,7 @@ module.exports = function ({ E, test, script, within, ROOT }) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sheets-test-")), bin = path.join(dir, "bin");
     fs.mkdirSync(bin); fs.mkdirSync(path.join(dir, "w", ".sheet"), { recursive: true });
     // A stand-in for the spacesheep CLI: it refuses the commands named in failOn, and answers the rest.
-    fs.writeFileSync(path.join(bin, "spacesheep"), `#!/bin/sh\necho "$*" >> ${dir}/calls.log\ncase " $* " in\n${failOn.map((w) => `  *" ${w} "*) echo "refused: $1" >&2; exit 1;;`).join("\n")}\n  *" spaces get "*) echo "  id: 00000000-0000-4000-8000-000000000000"; exit 0;;\nesac\ncat >> ${dir}/calls.log\necho '{"tabs_open":1}'\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(bin, "spacesheep"), `#!/bin/sh\necho "$*" >> ${dir}/calls.log\ncase " $* " in\n${failOn.map((w) => `  *" ${w} "*) echo "refused: $1" >&2; exit 1;;`).join("\n")}\n  *" spaces get "*) echo "  id: 00000000-0000-4000-8000-000000000000"; exit 0;;\nesac\ncat >> ${dir}/calls.log\necho >> ${dir}/calls.log\necho '{"tabs_open":1}'\n`, { mode: 0o755 });
     fs.writeFileSync(path.join(dir, "w", ".sheet", "space"), "00000000-0000-4000-8000-000000000000");
     fs.writeFileSync(path.join(dir, "w", "data.json"), JSON.stringify({ title: "T", tabs: [{ name: "Budget", freeze: 1, cells: { A1: "Item" } }] }));
     const run = (...args) => spawnSync(process.execPath, [SHEET_JS, "-C", path.join(dir, "w"), ...args], { encoding: "utf8", env: Object.assign({}, process.env, { PATH: `${bin}:${process.env.PATH}` }) });
@@ -294,6 +294,28 @@ module.exports = function ({ E, test, script, within, ROOT }) {
     assert.notStrictEqual(r.status, 0, r.stdout + r.stderr);
     assert.match(r.stdout, /saved: The budget/);
     assert.strictEqual(f.sent(), false);
+  });
+  // A save after a push is changed in place on open tabs only if they already show it, so the save pushes it first.
+  const livePages = (f) => f.calls().split("\n").filter((l) => l.startsWith('{"space_id"')).map((l) => JSON.parse(l)).filter((b) => b.html).map((b) => b.html);
+  const saved = (f) => fs.readFileSync(path.join(f.dir, "w", ".sheet", "work", "index.html"), "utf8");
+  test("sheet.js: a save shows open tabs the very page it saves, whole, before saving it", () => {
+    const f = folder([]);
+    const first = f.run("push", "Writing Budget");
+    assert.strictEqual(first.status, 0, first.stdout + first.stderr);
+    assert.deepStrictEqual(livePages(f), [saved(f)]); // the first save stores exactly the page just pushed
+    fs.mkdirSync(path.join(f.dir, "w", "cells"));
+    fs.writeFileSync(path.join(f.dir, "w", "cells", "01-rows.json"), JSON.stringify({ tab: "Budget", cells: { A2: "Rent", A3: "</pre><img src=x onerror=alert(1)>" } }));
+    assert.strictEqual(f.run("push", "Budget: 2 lines in").status, 0); // a batch, not a page
+    assert.strictEqual(livePages(f).length, 1);
+    const r = f.run("save", "The budget", "Done");
+    assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+    const pages = livePages(f), lines = f.calls().split("\n");
+    assert.strictEqual(pages.length, 2);
+    assert.strictEqual(pages[1], saved(f));
+    assert.ok(S.pageData(saved(f)).saved_at && S.pageData(saved(f)).tabs[0].cells.A3 === "</pre><img src=x onerror=alert(1)>");
+    const pushedAt = lines.findIndex((l) => l.startsWith('{"space_id"') && l.includes(JSON.stringify(pages[1]).slice(1, 200)));
+    assert.ok(pushedAt >= 0 && pushedAt < lines.findIndex((l, i) => i > pushedAt && l.startsWith("deploy ")), "the page went live after the save");
+    assert.match(r.stdout, /no cell changed since the last push/);
   });
   test("sheet.js: a first save that fails exits non-zero, and the next push saves it", () => {
     const f = folder(["deploy"]);

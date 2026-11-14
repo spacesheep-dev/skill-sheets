@@ -1,9 +1,11 @@
 # The sheet's JSON block
 
 The space's whole sheet is one JSON object inside
-`<script type="application/json" id="sheet-data">`. With a shell you write it as
+`<pre hidden id="sheet-data" data-ss-id="sheet-data">`. With a shell you write it as
 `data.json` plus `cells/NN-<what>.json` batches, and `sheet.js` puts it in the page. It
 must stay valid JSON: no comments, no trailing commas, and double quotes everywhere.
+In the page, every `<`, `>` and `&` in it is written `\u003c`, `\u003e` and `\u0026`
+(`sheet.js` does this), so the page reads it as text, never as HTML.
 
 In `data.json` only, two more fields are the page's words, kept out of the block: `lede`
 (one or two sentences above the grid) and `description` (one line for links and search).

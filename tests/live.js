@@ -61,8 +61,21 @@ module.exports = function ({ E, test, script, PAGE, ROOT }) {
   test("the page listens for its delta block and hands it to applyDelta", () => {
     const ui = script("sheet-ui");
     assert.match(ui, /addEventListener\("ss:live"/);
-    assert.match(ui, /E\.applyDelta\(data, box \? box\.textContent : ""\)/);
-    assert.match(PAGE, /<script type="application\/json" id="sheet-delta" data-ss-id="sheet-delta">\{\}<\/script>/);
+    assert.match(ui, /deltaText = text\("sheet-delta"\);/);
+    assert.match(ui, /E\.applyDelta\(data, deltaText\)/);
+    assert.match(PAGE, /<pre hidden id="sheet-delta" data-ss-id="sheet-delta">\{\}<\/pre>/);
+  });
+  // A whole page pushed with the same scripts is changed in place by the platform (a morph): nothing re-runs, and
+  // "ss:live" names every block. So no data is in a script, and the page reads its data block again when it changed.
+  test("no data is in a script: the sheet and its batches are hidden text blocks the page reads as text", () => {
+    assert.doesNotMatch(PAGE, /<script type="application\/json"/);
+    assert.match(PAGE, /<pre hidden id="sheet-data" data-ss-id="sheet-data">\n\{[\s\S]*?\n\}\n<\/pre>/);
+    const ui = script("sheet-ui");
+    assert.match(ui, /function text\(id\) \{ var n = document\.getElementById\(id\); return n \? n\.textContent : ""; \}/);
+    assert.match(ui, /data = JSON\.parse\(dataText\)/);
+    assert.match(ui, /if \(ids\.indexOf\("sheet-data"\) >= 0 && text\("sheet-data"\) !== dataText\) return retake\(\);/);
+    for (const id of ["sheet-engine", "sheet-ui"]) assert.doesNotMatch(script(id), /innerHTML|outerHTML|insertAdjacentHTML|document\.write|new Function|\beval\(/, id);
+    assert.doesNotMatch(PAGE.match(/<input id="fx"[^>]*>/)[0], /disabled/); // a whole-page update never disables the bar someone types in
   });
 
   test("a person's typing and place outlast a batch, a rewrite and a reload", () => {
@@ -70,20 +83,42 @@ module.exports = function ({ E, test, script, PAGE, ROOT }) {
     assert.match(ui, /fx\.value = d \? d\.text :/); // the formula bar shows the draft, whatever is redrawn
     assert.match(ui, /if \(!state\.picked && !state\.draft\)/); // a batch doesn't pull someone typing to another tab
     assert.match(ui, /state\.draft\.under = true/); // a batch to the very cell being typed in marks it, keeps the text
-    assert.match(ui, /history\.replaceState\(null, "", "#tab=" \+ encodeURIComponent\(t\.name\)\)/);
+    // the tab goes in the link with a hashchange (the viewer carries the # into the reload a save makes), and no Back step
+    assert.match(ui, /location\.replace\("#tab=" \+ hashOf\(t\.name\)\)/);
+    const hashOf = new Function("return " + /function hashOf\(name\) \{ return ([^\n]*); \}\n/.exec(ui)[1].replace(/^/, "(function (name) { return ") + "; })")();
+    for (const name of ["Q1 (plan)", "Bob's *list*!", "~tilde", "Sales & costs", "Ünïcode 年"]) {
+      assert.match("#tab=" + hashOf(name), /^#[A-Za-z0-9_.=%&/-]*$/, name); // what the viewer carries into a reload
+      assert.strictEqual(decodeURIComponent(hashOf(name)), name);
+    }
+    assert.doesNotMatch(ui, /history\.(replaceState|pushState)|location\.hash\s*=/);
     assert.match(ui, /sessionStorage\.setItem\(PLACE,/);
+    // the place is kept under the sheet's address without a version's part, so the reload onto /v/<sha>/ finds it
+    const key = new Function("location", "return " + /var PLACE = ("sheet-place:" \+ location\.pathname[\s\S]*?), placing = false/.exec(ui)[1]);
+    const at = (pathname) => key({ pathname });
+    assert.strictEqual(at("/v/0123abcd/"), at("/"));
+    assert.strictEqual(at("/v/0123abcd/index.html"), at("/index.html"));
+    assert.strictEqual(at("/s/0000-id/v/0123abcd/index.html"), at("/s/0000-id/"));
+    assert.strictEqual(at("/budget.html"), "sheet-place:/budget.html");
+    assert.notStrictEqual(at("/v/0123abcd/budget.html"), at("/"));
+    assert.notStrictEqual(at("/s/other-id/"), at("/s/0000-id/"));
+    assert.match(ui, /py: wantPy != null \? wantPy : window\.scrollY/); // a page not yet at full height doesn't store a shorter scroll
     assert.match(PAGE, /\.grid td\.under\{/);
   });
 
   // --- what sheet.js sends ---
+  // What a cell can hold that HTML would read: a closing tag, a tag, a comment, an entity, CR, NUL, line separators.
+  const HOSTILE = ["</pre><img src=x onerror=alert(1)>", "</script><script>alert(1)</script>", "<!-- x", "&lt;b&gt; &amp; &#60;", "a & b",
+    "a\r\nb\rc", "nul\u0000", "ls\u2028ps\u2029", "]]>", '<pre hidden id="sheet-data" data-ss-id="sheet-data">{}</pre>', "<svg/onload=alert(1)>"];
+  // HTML text with no <, > or & (nor CR or NUL, which a parser rewrites) is read as written: its textContent is the JSON.
+  const plainText = (t) => !/[<>&\r\u0000]/.test(t);
   test("a pushed batch can't end its block or start a tag, whatever a cell holds", () => {
-    const html = S.deltaEdit("Budget", { A2: "</script><img src=x onerror=alert(1)>", A3: "a & b" }).html;
-    assert.strictEqual((html.match(/<\/script>/g) || []).length, 1);
-    assert.ok(!/<img/.test(html));
-    const inner = /data-ss-id="sheet-delta">([\s\S]*)<\/script>$/.exec(html)[1];
+    const cells = Object.fromEntries(HOSTILE.map((v, i) => ["A" + (i + 2), v]));
+    const html = S.deltaEdit("Budget", cells).html;
+    const m = /^<pre hidden id="sheet-delta" data-ss-id="sheet-delta">([\s\S]*)<\/pre>$/.exec(html);
+    assert.ok(m && plainText(m[1]), html);
     const d = sheet();
-    assert.strictEqual(E.applyDelta(d, inner).ok, true);
-    assert.strictEqual(d.tabs[0].cells.A2, "</script><img src=x onerror=alert(1)>");
+    assert.strictEqual(E.applyDelta(d, m[1]).ok, true);
+    HOSTILE.forEach((v, i) => assert.strictEqual(d.tabs[0].cells["A" + (i + 2)], v));
   });
   test("the built page keeps the starter's scripts and escapes the words", () => {
     const s = Object.assign(sheet(), { title: "Bob's <b>budget</b>", lede: "Q1 & Q2 </p><script>x</script>", description: "\"quoted\"" });
@@ -92,11 +127,28 @@ module.exports = function ({ E, test, script, PAGE, ROOT }) {
     assert.strictEqual((page.match(/<script/g) || []).length, (PAGE.match(/<script/g) || []).length);
     assert.ok(page.includes("<h1 data-ss-id=\"title\">Bob's &lt;b&gt;budget&lt;/b&gt;</h1>"));
     assert.ok(page.includes("Q1 &amp; Q2 &lt;/p&gt;&lt;script&gt;x&lt;/script&gt;"));
-    const data = JSON.parse(/<script type="application\/json" id="sheet-data">([\s\S]*?)<\/script>/.exec(page)[1]);
+    const data = S.pageData(page);
     assert.strictEqual(data.tabs[0].cells.A2, "</script><script>alert(1)</script>");
     assert.strictEqual(data.lede, undefined);
-    assert.strictEqual(page.replace(/<script type="application\/json" id="sheet-data">[\s\S]*?<\/script>/, "").replace(/<title>.*<\/title>|<meta name="description"[^>]*>|<h1 data-ss-id="title">.*<\/h1>|<p class="lede" data-ss-id="lede">.*<\/p>/g, ""),
-      PAGE.replace(/<script type="application\/json" id="sheet-data">[\s\S]*?<\/script>/, "").replace(/<title>.*<\/title>|<meta name="description"[^>]*>|<h1 data-ss-id="title">.*<\/h1>|<p class="lede" data-ss-id="lede">.*<\/p>/g, ""));
+    const DATA = /<pre hidden id="sheet-data" data-ss-id="sheet-data">[\s\S]*?<\/pre>/;
+    assert.strictEqual(page.replace(DATA, "").replace(/<title>.*<\/title>|<meta name="description"[^>]*>|<h1 data-ss-id="title">.*<\/h1>|<p class="lede" data-ss-id="lede">.*<\/p>/g, ""),
+      PAGE.replace(DATA, "").replace(/<title>.*<\/title>|<meta name="description"[^>]*>|<h1 data-ss-id="title">.*<\/h1>|<p class="lede" data-ss-id="lede">.*<\/p>/g, ""));
+  });
+  test("a cell's text can't leave the sheet's data block, and comes back exactly as written", () => {
+    const s = sheet(); s.tabs.push({ name: "</pre><b>x", cells: {} });
+    HOSTILE.forEach((v, i) => { s.tabs[0].cells["A" + (i + 2)] = v; s.tabs[2].cells["B" + (i + 1)] = { v, note: v }; });
+    const page = S.buildPage(PAGE, s), inner = /<pre hidden id="sheet-data" data-ss-id="sheet-data">([\s\S]*?)<\/pre>/.exec(page)[1];
+    assert.ok(plainText(inner));
+    assert.strictEqual((page.match(/<\/pre>/g) || []).length, (PAGE.match(/<\/pre>/g) || []).length);
+    assert.strictEqual((page.match(/<img|<svg|<b>/g) || []).length, (PAGE.match(/<img|<svg|<b>/g) || []).length);
+    assert.deepStrictEqual(S.pageData(page), JSON.parse(JSON.stringify(s)));
+  });
+  test("every page sheet.js builds runs the starter's scripts exactly, so a push of it is changed in place", () => {
+    const scripts = (p) => (p.match(/<script[\s\S]*?<\/script>/g) || []).join("\n");
+    const a = sheet(), b = sheet(); b.title = "Other"; b.tabs[0].cells.A9 = HOSTILE[1]; b.tabs.push({ name: "Two", cells: { A1: HOSTILE[0] } });
+    assert.ok(scripts(PAGE).length > 1000);
+    assert.strictEqual(scripts(S.buildPage(PAGE, a)), scripts(PAGE));
+    assert.strictEqual(scripts(S.buildPage(PAGE, b)), scripts(PAGE));
   });
   test("fill-down moves relative references and keeps $, quotes and tab names", () => {
     const f = S.fill({ "F2:F4": "=IF($C2=\"B2\",'Q1 plan'!B2*Budget!$B$2,SUM(C$1:C2))", "B6:D6": "=B5*2", A1: "Item" }, "t");
