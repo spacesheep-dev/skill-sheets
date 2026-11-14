@@ -67,32 +67,52 @@ thing instead.
 
 ## Build a new sheet
 
-Do these in order.
+**The person watches the sheet fill in.** A status on the space within 10 seconds, the
+tabs and headers on screen within 30, every row in by 2 minutes, saved by 3. Write a
+part, push it, write the next: never the whole sheet before the first push.
 
-1. **Read the ask, then start.** Don't ask questions first. Use the person's own rows,
-   numbers and names when they give them. When they give no rows, add a few rows marked
-   as examples ("Example role"), and say in the lede and your reply that they're examples
-   to replace. Never invent figures and present them as real.
-2. **Plan the tabs.** Give each thing people update its own tab (one per team, one list
+You run one script, written in full every time: `node <this skill's folder>/assets/sheet.js
+-C <folder> <step>`, short `sheet.js <step>` below, where `<folder>` is an empty folder you
+work in. It talks to the space through the spacesheep CLI. You write only `data.json` and
+`cells/NN-<what>.json` in that folder; `sheet.js` builds the page from the starter. Never
+read, copy or write `references/sheet-template.html` yourself.
+
+1. **Start at once,** before you read anything else: `sheet.js start <link>` with the
+   space the person gave you, or `sheet.js start --new "<title>"` with none. It puts a
+   status on the space.
+2. **Read the ask.** Don't ask questions first. Use the person's own rows, numbers and
+   names when they give them. When they give no rows, add a few rows marked as examples
+   ("Example role"), and say in the lede and your reply that they're examples to replace.
+   Never invent figures and present them as real.
+3. **Plan the tabs.** Give each thing people update its own tab (one per team, one list
    of tasks). Put calculations people only read on their own tab ("Summary", "By
    month"). Keep inputs on the left and calculated columns on the right. Use one header
    row, frozen. Tab names are short and plain, at most 31 characters, with none of
    `[ ] : * ? / \`.
-3. **Copy the template exactly.** Read `references/sheet-template.html` and write the
-   whole space from it. Change only five things: `<title>`, the meta description, the
-   `<h1>`, the lede paragraph and the JSON block. Leave the styles, the scripts and the
-   `spacesheep:records` meta tag exactly as they are.
-4. **Write the cells.** Put headers in row 1 and one item per row below. Write dates as
-   `"2027-03-01"`, and numbers as plain numbers with no currency sign and no thousands
-   commas. Set number formats on columns (`money`, `pct`, `month` and the rest in the
-   format reference). Every number that comes from other cells is a formula.
-5. **Add the controls.** Use a drop-down (`lists`) for any column with a fixed set of
-   values: status, owner, priority, channel. Use checkboxes (`checks`) for done or yes/no.
-   Use highlights (`rules`) for anything the ask says should stand out. Add a chart only
-   when the ask wants one or a trend is the point.
-6. **Fill in the change record.** For a new sheet, set `saved_at` to now in UTC, leave
-   `edited` as `{}`, and leave out `before` and `change_note`.
-7. **Check it** (see "Checks before you finish"), then reply.
+4. **Push the frame within 30 seconds.** Write `data.json` in one Write: the sheet's JSON
+   (`references/sheet-format.md`) with every tab, its `freeze`, `cols` (widths and number
+   formats), header cells, drop-downs (`lists`), checkboxes (`checks`), highlights
+   (`rules`) and charts, plus `"lede"` (one or two sentences: what the sheet holds, who
+   updates it, which rows are examples) and `"description"` (one line). No rows yet.
+   Then `sheet.js push "Setting up <the tabs>"`: the page goes up and is saved.
+5. **Push the rows in batches.** Each batch is one Write of `cells/01-<what>.json`, then
+   `02-…` and on: `{"tab": "Transactions", "cells": {"A2": "2027-03-01", "B2": "Stock"}}`,
+   one tab and at most 500 cells. Then `sheet.js push "<what is landing>"`, such as
+   "Transactions: 12 example rows". Inputs first, then the formulas that read them, then
+   summaries. Each batch shows on every open tab within a second, outlined.
+   Write dates as `"2027-03-01"`, and numbers as plain numbers with no currency sign and
+   no thousands commas. Every number that comes from other cells is a formula.
+6. **Check once the first formulas are in,** not only at the end: `sheet.js check
+   Summary!B4 Summary!B20` lists error cells and unknown functions, and prints each cell
+   you name. Check two totals against what the rows should give. To fix a batch, write
+   its file again and push.
+7. **Save:** `sheet.js save "<what the sheet is>" "<one line: done>"`, then reply. The
+   save sets `saved_at`; for a new sheet leave `edited` as `{}`, and leave out `before`
+   and `change_note`.
+
+Add a drop-down for any column with a fixed set of values (status, owner, priority,
+channel), checkboxes for done or yes/no, highlights for anything the ask says should stand
+out, and a chart only when the ask wants one or a trend is the point.
 
 ### Formulas
 
@@ -223,7 +243,7 @@ Go through every one, every time.
    the buttons: it must say "No error cells". If it lists cells, fix them. Look at it at
    phone and desktop widths. You can open a tab directly by adding `#tab=Summary` to the
    space's address.
-7. **The template is untouched** outside the five parts you're allowed to change.
+7. **You wrote only `data.json` and `cells/`;** `sheet.js` built the page from the starter.
 
 ## Your reply
 
@@ -251,8 +271,10 @@ say "space", never "page".
   example. Read it before you write or change a sheet.
 - `references/functions.md`: every function the engine knows, with notes on Excel
   differences. Read it before you write formulas you haven't used here.
-- `references/sheet-template.html`: the space to copy for a new sheet. Read it whole
-  when you build one.
+- `assets/sheet.js`: the one script you run (start, push, save, check). Its header
+  lists each step; you don't need to read it.
+- `references/sheet-template.html`: the starter page `sheet.js` builds every sheet from.
+  Never read or copy it.
 - `references/examples.md`: three worked cases. They cover a sheet from one ask, a change
   with its record, and a cleaned import with a tracker. Read it when the ask is like one
   of them.
