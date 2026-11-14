@@ -58,8 +58,8 @@ thing instead.
 
 You've pushed the frame, and `start` named the tabs. Now:
 
-1. **Then one tab at a time: the tabs people update first, the summary last,** though it
-   stays first in the list. Work out only this tab's
+1. **Then one tab at a time: the tabs people fill in first, the one they only read last,**
+   though it stays first in the list. Work out only this tab's
    rows, write them as one batch, and push it in the same command. The status says what
    landed and what you write next: `sheet.js push "Budget: 14 lines in. Writing
    Transactions next"`. Keep each step under 45 seconds: a tab with many rows goes in two
@@ -81,6 +81,10 @@ You've pushed the frame, and `start` named the tabs. Now:
 5. **Save:** `sheet.js save "<what the sheet is>" "<one line: done>"`. It saves the
    version and shows the last changes on open tabs. Then reply. For a new sheet leave
    `edited` as `{}`, and leave out `before` and `change_note`.
+
+When the sheet is a plan someone will follow, give it a place to enter what really
+happens, and make the read-only tab compare the two. Leave that out where nothing is
+planned.
 
 Add a drop-down for any column with a fixed set of values (status, owner, priority,
 channel), checkboxes for done or yes/no, highlights for anything the ask says should stand
