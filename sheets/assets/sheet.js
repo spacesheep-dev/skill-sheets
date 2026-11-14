@@ -303,11 +303,14 @@ function pushSheet(sheet, say) {
     try { const a = live({ html: page }); console.log(`pushed the whole page (${page.length} bytes${seen(a)}, ${took()})`); }
     catch (e) { console.error(`page push refused: ${why(e)}. Nothing is marked sent: push again`); return false; }
     fs.writeFileSync(sentFile, JSON.stringify(sheet));
+    // The first save goes before the status: open tabs say Done on a save and take the work card down, and the
+    // status after it puts the card straight back, so a sheet of headers isn't shown as done until the next status.
+    const saved = firstSave(sheet, say, page);
     if (say) status(say);
-    return firstSave(sheet, say, page);
+    return saved;
   }
   const bs = batches(sent, sheet);
-  if (!bs.length) { if (say) status(say); console.log("no cell changed since the last push"); return firstSave(sheet, say); }
+  if (!bs.length) { const saved = firstSave(sheet, say); if (say) status(say); console.log("no cell changed since the last push"); return saved; }
   let done = 0, last = {};
   for (const [i, b] of bs.entries()) {
     const line = bs.length > 1 ? `${say || "Writing cells"} (${i + 1} of ${bs.length})` : say;
@@ -318,7 +321,9 @@ function pushSheet(sheet, say) {
     fs.writeFileSync(sentFile, JSON.stringify(was));
   }
   console.log(`pushed ${done} cell${done === 1 ? "" : "s"} in ${bs.length} batch${bs.length === 1 ? "" : "es"}${seen(last)} (${took()})`);
-  return firstSave(sheet, say);
+  const first = !fs.existsSync(pubFile), saved = firstSave(sheet, say);
+  if (first && saved && say) status(say); // the card back up after a first save that a batch's status came before
+  return saved;
 }
 // What's pushed (sent.json) and whether it's saved (published) are kept apart. Until the sheet has been saved once,
 // every push tries the save again, so a later visitor sees it, and fails while it can't.
@@ -344,16 +349,16 @@ if (cmd === "save") {
   let sheet;
   try { sheet = assemble(DIR); } catch (e) { die(`save: ${e.message}`, 1); }
   rulesFirst(sheet, "save");
-  // Open tabs are shown this version first, whole and in place, so when it is saved they already show it.
+  // Open tabs are shown this version first, whole and in place, so when it is saved they already show it. If they
+  // can't be, the save still reaches them: open tabs take every saved version.
   const page = pageOf(sheet);
-  try { const a = live({ html: page }); fs.writeFileSync(sentFile, JSON.stringify(sheet)); console.log(`pushed the whole page (${page.length} bytes${seen(a)}, ${took()})`); }
-  catch (e) { console.error(`page push refused: ${why(e)}`); }
+  try { const a = live({ html: page }); console.log(`pushed the whole page (${page.length} bytes${seen(a)}, ${took()})`); }
+  catch (e) { console.error(`page push refused: ${why(e)}. Open tabs get it from the save`); }
   try { publish(page, message); } catch (e) { die(`save refused: ${why(e)}`, 1); }
+  fs.writeFileSync(sentFile, JSON.stringify(sheet));
+  // The save ends the run: open tabs say Done and take the work card down. Nothing is sent after it: a status, a
+  // batch's included, would put the card back up for hours.
   console.log(`saved: ${message} (${took()})`);
-  // The save ends the run: open tabs say Done and take the work card down. A status after it would put the card
-  // back up for hours, so none is sent. Open tabs still get what changed since the last push: highlights, charts,
-  // last cells. If that fails, the version is saved but people watching don't see it yet: say so, and fail.
-  if (!pushSheet(sheet, "")) die("saved, but open tabs didn't get the last changes: run push, with no status", 1);
   process.exit(0);
 }
 

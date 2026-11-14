@@ -313,11 +313,12 @@ module.exports = function ({ E, test, script, within, ROOT }) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sheets-test-")), bin = path.join(dir, "bin");
     fs.mkdirSync(bin); fs.mkdirSync(path.join(dir, "w", ".sheet"), { recursive: true });
     // A stand-in for the spacesheep CLI: it refuses the commands named in failOn, and answers the rest.
-    fs.writeFileSync(path.join(bin, "spacesheep"), `#!/bin/sh\necho "$*" >> ${dir}/calls.log\ncase " $* " in\n${failOn.map((w) => `  *" ${w} "*) echo "refused: $1" >&2; exit 1;;`).join("\n")}\n  *" spaces get "*) echo "  id: 00000000-0000-4000-8000-000000000000"; exit 0;;\nesac\ncat >> ${dir}/calls.log\necho >> ${dir}/calls.log\necho '{"tabs_open":1}'\n`, { mode: 0o755 });
+    const refuse = (words) => fs.writeFileSync(path.join(bin, "spacesheep"), `#!/bin/sh\necho "$*" >> ${dir}/calls.log\ncase " $* " in\n${words.map((w) => `  *" ${w} "*) echo "refused: $1" >&2; exit 1;;`).join("\n")}\n  *" spaces get "*) echo "  id: 00000000-0000-4000-8000-000000000000"; exit 0;;\nesac\ncat >> ${dir}/calls.log\necho >> ${dir}/calls.log\necho '{"tabs_open":1}'\n`, { mode: 0o755 });
+    refuse(failOn);
     fs.writeFileSync(path.join(dir, "w", ".sheet", "space"), "00000000-0000-4000-8000-000000000000");
     fs.writeFileSync(path.join(dir, "w", "data.json"), JSON.stringify({ title: "T", tabs: [{ name: "Budget", freeze: 1, cells: { A1: "Item" } }] }));
     const run = (...args) => spawnSync(process.execPath, [SHEET_JS, "-C", path.join(dir, "w"), ...args], { encoding: "utf8", env: Object.assign({}, process.env, { PATH: `${bin}:${process.env.PATH}` }) });
-    return { dir, run, sent: () => fs.existsSync(path.join(dir, "w", ".sheet", "sent.json")), calls: () => fs.readFileSync(path.join(dir, "calls.log"), "utf8") };
+    return { dir, run, refuse, sent: () => fs.existsSync(path.join(dir, "w", ".sheet", "sent.json")), calls: () => fs.readFileSync(path.join(dir, "calls.log"), "utf8") };
   }
   // --- the skill in two parts: start names the sheet; the first push prints the rest ---
   const BUILD = fs.readFileSync(path.join(ROOT, "sheets/references/build.md"), "utf8").split("\n")[0];
@@ -358,12 +359,25 @@ module.exports = function ({ E, test, script, within, ROOT }) {
     assert.strictEqual(f.sent(), false);
     assert.doesNotMatch(f.run("push").stdout, /no cell changed/);
   });
-  test("sheet.js: a save whose version lands but whose live push fails exits non-zero", () => {
-    const f = folder(["call"]);
+  // The save is the run's last word: open tabs say Done on it and take the work card down, and anything sent after
+  // it (a status, or a batch's) puts the card back. Open tabs take every saved version, so a refused page push
+  // before it leaves nothing to send after it.
+  const afterSave = (f) => { const lines = f.calls().split("\n"); return lines.slice(lines.map((l) => l.startsWith("deploy ")).lastIndexOf(true) + 1).filter((l) => l.trim()); };
+  test("sheet.js: a save whose page push is refused still saves, and sends nothing after the version", () => {
+    const f = folder([]);
+    assert.strictEqual(f.run("push", "Writing Budget").status, 0);
+    const cells = {};
+    for (let r = 2; r <= 1201; r++) cells["A" + r] = "Row " + r;
+    fs.mkdirSync(path.join(f.dir, "w", "cells"));
+    fs.writeFileSync(path.join(f.dir, "w", "cells", "01-rows.json"), JSON.stringify({ tab: "Budget", cells }));
+    f.refuse(["call"]);
     const r = f.run("save", "The budget");
-    assert.notStrictEqual(r.status, 0, r.stdout + r.stderr);
+    assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stderr, /page push refused/);
     assert.match(r.stdout, /saved: The budget/);
-    assert.strictEqual(f.sent(), false);
+    assert.deepStrictEqual(afterSave(f), [], "something was sent after the save");
+    f.refuse([]);
+    assert.match(f.run("push").stdout, /no cell changed/); // what the save holds is what a push diffs from
   });
   // A save after a push is changed in place on open tabs only if they already show it, so the save pushes it first.
   const livePages = (f) => f.calls().split("\n").filter((l) => l.startsWith('{"space_id"')).map((l) => JSON.parse(l)).filter((b) => b.html).map((b) => b.html);
@@ -385,10 +399,14 @@ module.exports = function ({ E, test, script, within, ROOT }) {
     assert.ok(S.pageData(saved(f)).saved_at && S.pageData(saved(f)).tabs[0].cells.A3 === "</pre><img src=x onerror=alert(1)>");
     const pushedAt = lines.findIndex((l) => l.startsWith('{"space_id"') && l.includes(JSON.stringify(pages[1]).slice(1, 200)));
     assert.ok(pushedAt >= 0 && pushedAt < lines.findIndex((l, i) => i > pushedAt && l.startsWith("deploy ")), "the page went live after the save");
-    assert.match(r.stdout, /no cell changed since the last push/);
-    // The version is the run's last word: open tabs take the work card down on it, and a status after it puts it back.
-    const savedAt = lines.map((l) => l.startsWith("deploy ")).lastIndexOf(true);
-    assert.deepStrictEqual(lines.slice(savedAt + 1).filter((l) => l.trim()), [], "something was sent after the save");
+    assert.deepStrictEqual(afterSave(f), [], "something was sent after the save");
+  });
+  test("sheet.js: the first save goes before the push's status, so the card says Done for a moment, not until the next status", () => {
+    const f = folder([]);
+    assert.strictEqual(f.run("push", "Writing Budget").status, 0);
+    const lines = f.calls().split("\n"), at = (p) => lines.findIndex(p);
+    const saved = at((l) => l.startsWith("deploy ")), said = at((l) => / --status Writing Budget$/.test(l));
+    assert.ok(saved >= 0 && said > saved, "the status came before the first save");
   });
   test("sheet.js: a refused save exits non-zero and sends no status, so nothing on screen says it's done", () => {
     const f = folder(["deploy"]);

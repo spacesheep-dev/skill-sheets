@@ -14,7 +14,7 @@ Each release is a heading with its tag. The release workflow uses the words unde
 - **Timings,** on staging with Claude Opus 5.5 at high effort, one run each: a job tracker was done in 1:36, a sales pipeline in 2:21, and a holiday cost split in 3:24 (about 45 s of that was a refused first save, since fixed). The page never went more than 40 s without a change. At xhigh effort the pipeline and the split took 2:50 to 4:35, with up to 1:21 between changes.
 - **Breaking:** a sheet made by v1.0.0 keeps its data in a form this version doesn't read. Asked to change one, the agent starts a new sheet in that space; the old one stays in the space's history.
 - A save changes open tabs in place, rather than reloading them, once Spacesheep has its 14 Nov 2026 save fix (on staging now).
-- The folder's hash is `d363c08e15ea`.
+- The folder's hash is `588677748940`.
 
 ## v1.0.0
 
