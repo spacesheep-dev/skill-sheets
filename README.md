@@ -4,10 +4,11 @@ Spacesheep's official Sheets skill, in the [Agent Skills](https://agentskills.io
 
 ## Change it
 
-1. Edit `sheets/`, then check it:
+1. Edit `sheets/`, then check it and run the tests (Node only, nothing to install):
 
    ```bash
    npx -y spacesheep@latest skills lint
+   node tests/run.js
    ```
 
 2. Add a heading for the version to `CHANGELOG.md` (`## v1.1.0`), with what changed under it.
