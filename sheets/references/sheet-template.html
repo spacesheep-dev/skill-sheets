@@ -1309,14 +1309,18 @@ self.onmessage = function (e) {
     placing = true; render(); select(state.sel); if (i >= 0) putBack(p); if (drafting()) { state.refocus = true; renderBar(); }
     placing = false; keepPlace();
   }
+  // A whole page with the same data (a save straight after a push, a new description) still lays the page's source
+  // over what this script drew: the status line and the cell's address, and with no earlier page to compare against,
+  // the grid, tabs and charts too. So it's all drawn again, where the person is.
+  function redraw() { var p = kept; placing = true; render(); select(state.sel); if (p) putBack(p); placing = false; keepPlace(); }
   // A batch the agent pushes while it builds replaces #sheet-delta, and the page's "ss:live" event names
   // it. It lands outlined, on its own tab unless the person picked one.
   document.addEventListener("ss:live", function (e) {
-    var ids = (e.detail && e.detail.ids) || [];
-    if (ids.indexOf("sheet-data") >= 0 && text("sheet-data") !== dataText) return retake();
-    if (ids.indexOf("sheet-delta") < 0 || text("sheet-delta") === deltaText) return;
-    deltaText = text("sheet-delta");
-    if (/^\s*(\{\s*\})?\s*$/.test(deltaText)) return; // emptied by a whole-page update: nothing to draw
+    var ids = (e.detail && e.detail.ids) || [], whole = ids.indexOf("sheet-data") >= 0; // a whole page names every block
+    if (whole && text("sheet-data") !== dataText) return retake();
+    var batch = ids.indexOf("sheet-delta") >= 0 && text("sheet-delta") !== deltaText;
+    if (batch) deltaText = text("sheet-delta");
+    if (!batch || /^\s*(\{\s*\})?\s*$/.test(deltaText)) { if (whole) redraw(); return; } // no new batch (one a whole page emptied included)
     var r = E.applyDelta(data, deltaText);
     if (!r.ok) { var st = document.getElementById("status"); st.textContent = "A batch of cells wasn't shown: " + r.why + "."; st.className = "status err"; return; }
     var now = Date.now(), tn = r.tab.toLowerCase();

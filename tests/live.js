@@ -73,9 +73,43 @@ module.exports = function ({ E, test, script, PAGE, ROOT }) {
     const ui = script("sheet-ui");
     assert.match(ui, /function text\(id\) \{ var n = document\.getElementById\(id\); return n \? n\.textContent : ""; \}/);
     assert.match(ui, /data = JSON\.parse\(dataText\)/);
-    assert.match(ui, /if \(ids\.indexOf\("sheet-data"\) >= 0 && text\("sheet-data"\) !== dataText\) return retake\(\);/);
+    assert.match(ui, /whole = ids\.indexOf\("sheet-data"\) >= 0;/);
+    assert.match(ui, /if \(whole && text\("sheet-data"\) !== dataText\) return retake\(\);/);
     for (const id of ["sheet-engine", "sheet-ui"]) assert.doesNotMatch(script(id), /innerHTML|outerHTML|insertAdjacentHTML|document\.write|new Function|\beval\(/, id);
     assert.doesNotMatch(PAGE.match(/<input id="fx"[^>]*>/)[0], /disabled/); // a whole-page update never disables the bar someone types in
+  });
+  // Wherever the morph can't tell the pushed page's source from what the page's script drew, it puts the source back:
+  // always the status line and the cell's address; also the grid, tabs and charts when it has no earlier page to
+  // compare against. So a whole page with the same data (a save straight after a push of the same page) must still
+  // make the page draw again. This runs the page's own "ss:live" listener with the blocks as each kind of update
+  // leaves them.
+  test("after a whole page with the same data, the page draws again where the person is", () => {
+    const ui = script("sheet-ui");
+    const src = /document\.addEventListener\("ss:live", (function \(e\) \{[\s\S]*?\n  \})\);/.exec(ui)[1];
+    const DATA = JSON.stringify(sheet()), ALL = ["title", "lede", "what-changed", "sheet-data", "sheet-delta"];
+    function live(blocks, detail, was = { data: DATA, delta: "{}" }) {
+      const calls = [], d = JSON.parse(DATA), state = { ver: 0, sel: "B3", picked: true, draft: null, tab: 1 };
+      const on = new Function("text", "retake", "redraw", "render", "select", "E", "data", "state", "stamps", "dataText", "deltaText", "savedAt", "return " + src)(
+        (id) => blocks[id], () => calls.push("retake"), () => calls.push("redraw"), () => calls.push("render"), () => {}, E, d, state, {}, was.data, was.delta, 0);
+      on({ detail });
+      return { calls, d };
+    }
+    const same = { "sheet-data": DATA, "sheet-delta": "{}" };
+    // the save of the very page the last push drew, or a page with only a new description: drawn again
+    assert.deepStrictEqual(live(same, { mode: "morph", ids: ALL }).calls, ["redraw"]);
+    assert.deepStrictEqual(live(same, { mode: "stream", ids: ALL }).calls, ["redraw"]);
+    // a whole page that empties a batch block the page had drawn: drawn again, the batch not applied twice
+    assert.deepStrictEqual(live(same, { mode: "morph", ids: ALL }, { data: DATA, delta: '{"tab":"Budget","cells":{"A2":"x"}}' }).calls, ["redraw"]);
+    // a whole page with new data: read again (which draws)
+    const moved = JSON.parse(DATA); moved.tabs[0].cells.B2 = 5;
+    assert.deepStrictEqual(live({ "sheet-data": JSON.stringify(moved), "sheet-delta": "{}" }, { mode: "morph", ids: ALL }).calls, ["retake"]);
+    // a batch: applied and drawn once, not drawn again on top
+    const b = live({ "sheet-data": DATA, "sheet-delta": JSON.stringify({ tab: "Budget", cells: { A2: "Rent", B2: 1200 } }) }, { mode: "patch", ids: ["sheet-delta"] });
+    assert.deepStrictEqual(b.calls, ["render"]);
+    assert.strictEqual(b.d.tabs[0].cells.B2, 1200);
+    // an update that names neither block (a save that changed only the title), or a batch already drawn: nothing drawn
+    assert.deepStrictEqual(live(same, { mode: "diff", ids: ["title"] }).calls, []);
+    assert.deepStrictEqual(live(same, { mode: "patch", ids: ["sheet-delta"] }).calls, []);
   });
 
   test("a person's typing and place outlast a batch, a rewrite and a reload", () => {
