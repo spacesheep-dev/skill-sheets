@@ -144,7 +144,9 @@ a column or a tab, so anything beside a table is read as part of it.
   first need it.
 - **Lists people edit stay where they fill things in.** Teams, players or products go on
   a tab of their own or an input tab, under a header that says so. Workings reads them
-  (`=Teams!A2`). Never keep them only on Workings, or beside a table people read.
+  (`=Teams!A2`). Never keep them only on Workings, or beside a table people read. Figures
+  a read tab shows again, like a league table's points, go on Workings too, not beside the
+  list's names, so each figure shows once.
 - **A ranked table** (a league, a top 5) has no SORT, RANK or LARGE to use. On Workings,
   give one row to each name, with its figures and its position. Ties split on the next
   figure, then by the list's order, so each position appears once. With points in B and
