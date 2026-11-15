@@ -249,7 +249,22 @@ module.exports = function ({ E, test, script, within, ROOT }) {
     assert.match(ui, /try \{\s*raw = book\.raw\[tname\]\[a\]; v = book\.value\(tab\.name, a\)/); // each cell under its own guard...
     assert.match(ui, /\} catch \(e\) \{ \/\/ anything else this cell can't draw[^\n]*\n[^\n]*unshown\.push\(\{ a: a/); // ...shown as it is, and named in the status
     assert.match(ui, /try \{ drawChart\(host, tab, ch, idx, W\); \} catch \(e\)/); // each chart too
-    assert.match(ui, /fetch\(API \+ "\/records\/" \+ COL \+ "\/mine"[\s\S]{0,600}?\n    render\(\); select\(a\);/); // an edit is sent before it's drawn
+    assert.match(ui, /fetch\(API \+ "\/records\/" \+ COL \+ "\/mine"[\s\S]{0,600}?\n    render\(\); select\(stay \? state\.sel : a\);/); // an edit is sent before it's drawn
+  });
+  test("leaving the formula bar sends an edit only when its text changed: the bar and its check share one text, a date as typed", () => {
+    const ui = script("sheet-ui");
+    assert.match(ui, /function barText\(tab, a\) \{[^\n]*inp\.date \? book\.raw\[tab\.name\.toLowerCase\(\)\]\[a\]\.v/); // 2026-10-13, as typed, not the serial
+    assert.match(ui, /fx\.value = d \? d\.text : barText\(tab, state\.sel\);/); // what the bar shows...
+    assert.match(ui, /if \(fx\.value === barText\(tabObj\(\), state\.sel\)\) return;/); // ...is what leaving it compares with
+    assert.match(ui, /var h = \[state\.sel, fx\.value, tabObj\(\)\.name\];\s*if \(down\) held = h; else keepTyped\(h\);/); // in the cell and tab it was typed in, after the tap
+    assert.match(ui, /setTimeout\(function \(\) \{ write\(h\[0\], h\[1\], true, h\[2\]\); \}, 0\)/); // ...keeping the tapped cell selected
+  });
+  test("no two of a script's own functions share a name, so a new one can't quietly replace another", () => {
+    for (const id of ["sheet-engine", "sheet-ui"]) {
+      const names = [...script(id).matchAll(/^  function (\w+)\(/gm)].map((m) => m[1]); // the script's top level
+      assert.ok(names.length > 20, id + ": too few functions found to check");
+      assert.deepStrictEqual(names.filter((n, i) => names.indexOf(n) !== i), [], id + " declares the same function twice");
+    }
   });
   test("files are made by makeFile, within the budget: out of budget is a refusal, never a partial file", () => {
     const ok = E.makeFile("csv", { tabs: [{ name: "T", cells: { A1: 2, A2: "=A1*21" } }] }, {}, "T");

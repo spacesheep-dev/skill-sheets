@@ -1072,10 +1072,13 @@ self.onmessage = function (e) {
   }
   // What a person is typing is theirs: no redraw writes over it, and it outlasts a rewrite or a reload.
   function drafting() { var d = state.draft; return d && d.tab === tabObj().name && d.cell === state.sel ? d : null; }
+  // What the formula bar shows for a cell: its formula, or what was typed (a date as typed, 2026-10-13). The bar's
+  // change handler compares with the same text, so leaving the bar never sends an edit nobody made.
+  function barText(tab, a) { var inp = book.input(tab.name, a); return !inp ? "" : inp.formula !== undefined ? "=" + inp.formula : inp.value === null ? "" : (inp.date ? book.raw[tab.name.toLowerCase()][a].v : String(inp.value)); }
   function renderBar() {
-    var tab = tabObj(), inp = book.input(tab.name, state.sel), fx = document.getElementById("fx"), d = drafting();
+    var tab = tabObj(), fx = document.getElementById("fx"), d = drafting();
     document.getElementById("addr").textContent = tab.name + "!" + state.sel;
-    fx.value = d ? d.text : !inp ? "" : inp.formula !== undefined ? "=" + inp.formula : inp.value === null ? "" : (inp.date ? book.raw[tab.name.toLowerCase()][state.sel].v : String(inp.value));
+    fx.value = d ? d.text : barText(tab, state.sel);
     fx.disabled = !state.loaded || !state.signedIn;
     if (state.refocus && d && !fx.disabled) { state.refocus = false; fx.focus(); } // back to the half-typed text after a reload
   }
@@ -1161,16 +1164,16 @@ self.onmessage = function (e) {
   }
   addEventListener("resize", function () { if (book && chartWidth() !== chartW) { unchart = []; renderCharts(); renderStatus(); } });
   // --- people's edits: one shared record each, newest edit to a cell wins ---
-  function write(a, value) {
+  function write(a, value, stay, tabName) { // stay: keep the selection where it is (the person has moved on); tabName: the tab it was typed in
     if (!state.loaded || !state.signedIn) return;
-    var tab = tabObj(), key = tab.name + "!" + a, v = value;
+    var key = (tabName || tabObj().name) + "!" + a, v = value;
     if (typeof v === "string") { var s = v.trim(); if (s !== "" && s.charAt(0) !== "=" && !isNaN(Number(s.replace(/,/g, ""))) && !/^0\d/.test(s)) v = Number(s.replace(/,/g, "")); else if (/^(true|false)$/i.test(s)) v = /^true$/i.test(s); }
     state.mine[key] = { v: v, at: new Date().toISOString() }; state.ver++; state.draft = null;
     // Sent before it's drawn: what they typed is kept even if something on the page can't show it.
     fetch(API + "/records/" + COL + "/mine", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ data: { edits: state.mine } }) })
       .then(function (r) { if (!r.ok) throw new Error(r.status === 413 ? "Your edits are over the 32 KB a person can keep. Ask the owner to fold them into the sheet." : "Couldn't save (" + r.status + ")."); })
       .catch(function (e) { var st = document.getElementById("status"); st.textContent = e.message; st.className = "status err"; });
-    render(); select(a);
+    render(); select(stay ? state.sel : a);
   }
   var settled = false;
   addEventListener("spacesheep:session", function (e) { settled = true; if (e.detail && e.detail.signed_in) load(0); });
@@ -1218,7 +1221,18 @@ self.onmessage = function (e) {
     if (e.key === "Escape") { state.draft = null; render(); fx.blur(); keepPlace(); }
   });
   fx.addEventListener("input", function () { var d = drafting(); state.draft = { tab: tabObj().name, cell: state.sel, text: fx.value, under: !!(d && d.under) }; keepPlace(); });
-  fx.addEventListener("change", function () { var inp = book.input(tabObj().name, state.sel), cur = !inp ? "" : inp.formula !== undefined ? "=" + inp.formula : inp.value === null ? "" : String(inp.value); if (fx.value !== cur) write(state.sel, fx.value); });
+  // Leaving the bar keeps what was typed, in the cell and tab it was typed in. It's sent just after the tap or click
+  // that left it, so the redraw doesn't take the tapped cell from under the tap, and the tapped cell stays selected.
+  // A mouse leaves the bar on press: then it waits for the release. A finger leaves it after lifting, with the click.
+  var down = false, held = null;
+  function keepTyped(h) { setTimeout(function () { write(h[0], h[1], true, h[2]); }, 0); }
+  fx.addEventListener("change", function () {
+    if (fx.value === barText(tabObj(), state.sel)) return;
+    var h = [state.sel, fx.value, tabObj().name];
+    if (down) held = h; else keepTyped(h);
+  });
+  addEventListener("pointerdown", function () { down = true; }, true);
+  ["pointerup", "pointercancel"].forEach(function (t) { addEventListener(t, function () { down = false; if (held) { keepTyped(held); held = null; } }, true); });
   document.addEventListener("keydown", function (e) {
     if (document.activeElement === fx || /INPUT|SELECT|TEXTAREA/.test((document.activeElement || {}).tagName || "")) return;
     var mv = E.map({ ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] })[e.key];
