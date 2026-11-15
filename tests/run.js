@@ -81,6 +81,71 @@ test("report lists every error cell", () => {
   assert.deepStrictEqual(errs.sort(), ["Summary!B10 #CYCLE!", "Summary!B11 #NAME?", "Summary!B12 #DIV/0!", "Summary!B13 #REF!", "Summary!B9 #CYCLE!", "Summary!C10 #CYCLE!"].sort());
 });
 
+// --- a chart's axes: readable at a phone's width, round steps, no labels on top of each other ---
+const GB = { locale: "en-GB", currency: "GBP" };
+const width7 = (s) => s.length * 7; // about system-ui at 12 px
+const monthsOf = (y, n) => Array.from({ length: n }, (_, i) => { const v = E.serial(y + Math.floor(i / 12), i % 12 + 1, 1); return { v, fmt: "month", text: E.fmtValue(v, "month", GB) }; });
+// Each label drawn, where the page draws it: none may touch the next (4 px apart in a row, 12 px apart angled).
+function assertApart(ax, what) {
+  const xs = ax.labels.map((s, i) => ({ s, x: ax.left + ax.gap * i + ax.gap / 2 })).filter((_, i) => ax.show[i]);
+  for (let i = 1; i < xs.length; i++) {
+    const a = xs[i - 1], b = xs[i], space = ax.angle ? (b.x - a.x) * Math.SQRT1_2 : b.x - a.x - (width7(a.s) + width7(b.s)) / 2;
+    assert.ok(space >= (ax.angle ? 12 : 4), `${what}: "${a.s}" and "${b.s}" are ${space.toFixed(1)} px apart`);
+  }
+  assert.ok(ax.show[0], `${what}: the first label shows`);
+}
+test("a chart's value axis steps are round: £0, £500, £1,000, £1,500, not quarters of the biggest bar", () => {
+  const ax = E.chartAxes({ labels: monthsOf(2026, 12), max: 1362, fmt: "money", title: "Revenue by month, 2026", series: ["Revenue"], width: 760, measure: width7, data: GB });
+  assert.deepStrictEqual(Array.from(ax.ticks, (t) => t.text), ["£0", "£500", "£1,000", "£1,500"]);
+  assert.strictEqual(ax.top, 1500);
+  const pct = E.chartAxes({ labels: [], max: 0.83, fmt: "pct", width: 760, measure: width7, data: GB });
+  assert.deepStrictEqual(Array.from(pct.ticks, (t) => t.text), ["0%", "20%", "40%", "60%", "80%", "100%"]);
+  const few = E.chartAxes({ labels: [], max: 3, fmt: "int", width: 760, measure: width7, data: GB });
+  assert.deepStrictEqual(Array.from(few.ticks, (t) => t.text), ["0", "1", "2", "3"]); // whole numbers stay whole
+});
+test("twelve months say Jan … Dec when the title names their year, and fit in a row at 1280 and thin to every other on a phone", () => {
+  const o = { labels: monthsOf(2026, 12), max: 1362, fmt: "money", title: "Revenue by month, 2026", series: ["Revenue"], measure: width7, data: GB };
+  const wide = E.chartAxes(Object.assign({ width: 860 }, o)), phone = E.chartAxes(Object.assign({ width: 358 }, o));
+  assert.deepStrictEqual(wide.labels, ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sept", "Oct", "Nov", "Dec"]);
+  assert.deepStrictEqual([wide.every, wide.angle], [1, 0]);
+  assert.deepStrictEqual([phone.every, phone.angle], [2, 0]);
+  assertApart(wide, "1280"); assertApart(phone, "390");
+  assert.strictEqual(phone.key, false); // the title names the only series
+});
+test("months keep their year when the title doesn't name it, or they span two years, and still never touch", () => {
+  const noYear = E.chartAxes({ labels: monthsOf(2026, 12), max: 900, fmt: "money", title: "Revenue by month", width: 358, measure: width7, data: GB });
+  assert.strictEqual(noYear.labels[0], "Jan 2026");
+  assertApart(noYear, "no year in the title");
+  const two = E.chartAxes({ labels: monthsOf(2025, 18), max: 900, fmt: "money", title: "Revenue, 2025", width: 860, measure: width7, data: GB });
+  assert.strictEqual(two.labels[12], "Jan 2026");
+  assertApart(two, "two years");
+});
+test("category names are angled so each still shows on a phone, and thinned only when even angled ones can't fit", () => {
+  const names = ["House Espresso", "Brazil Cerrado", "Colombia Huila", "Ethiopia Yirgacheffe", "Swiss Water Decaf"].map((s) => ({ v: s, fmt: null, text: s }));
+  const phone = E.chartAxes({ labels: names, max: 4200, fmt: "money", title: "Revenue by product", series: ["Revenue", "Orders"], width: 358, measure: width7, data: GB });
+  assert.strictEqual(phone.angle, 45);
+  assert.deepStrictEqual(phone.show, [true, true, true, true, true]);
+  assert.strictEqual(phone.labels[3], "Ethiopia Yi…");
+  assert.ok(phone.left - phone.labels.reduce((m, s) => Math.max(m, width7(s)), 0) * Math.SQRT1_2 + phone.gap / 2 >= 0, "the first angled label starts inside the chart");
+  assert.strictEqual(phone.key, true); // two series need their key
+  const wide = E.chartAxes({ labels: names, max: 4200, fmt: "money", title: "Revenue by product", width: 860, measure: width7, data: GB });
+  assert.deepStrictEqual([wide.angle, wide.labels[3]], [0, "Ethiopia Yirgacheffe"]); // room for the whole name in a row
+  assertApart(wide, "names at 1280");
+  const many = Array.from({ length: 40 }, (_, i) => ({ v: "Branch " + (i + 1), fmt: null, text: "Branch " + (i + 1) }));
+  const crowded = E.chartAxes({ labels: many, max: 10, fmt: "int", width: 358, measure: width7, data: GB });
+  assert.ok(crowded.every > 1); assertApart(crowded, "40 names");
+  const days = Array.from({ length: 60 }, (_, i) => { const v = E.serial(2026, 11, 1) + i; return { v, fmt: "date", text: E.fmtValue(v, "date", GB) }; });
+  assertApart(E.chartAxes({ labels: days, max: 10, fmt: "int", width: 358, measure: width7, data: GB }), "60 days");
+});
+test("a chart's axes come out whole for any values a sheet can hold", () => {
+  const vals = [0, -5, 1e-9, 0.5, 7, 1362, 1e15, 1e308, NaN];
+  for (const max of vals) for (const fmt of ["money", "money2", "int", "num", "pct", "pct1", "nope"]) for (const width of [260, 358, 860]) {
+    const ax = E.chartAxes({ labels: [{ v: { e: "#REF!" }, fmt: null, text: "#REF!" }, { v: null, fmt: null, text: "" }, { v: 46000, fmt: "month", text: "x" }], max, fmt, width, measure: width7, data: GB });
+    assert.ok(ax.ticks.length >= 2 && ax.ticks.length <= 12 && ax.ticks.every((t) => isFinite(t.v) && typeof t.text === "string"), `${max} ${fmt}`);
+    assert.ok(ax.top > 0 && isFinite(ax.top) && ax.every >= 1 && ax.height > ax.plot, `${max} ${fmt} ${width}`);
+  }
+});
+
 // --- what the page's scripts may never do with cell data ---
 test("the page's scripts never write HTML or run text as code", () => {
   const code = script("sheet-engine") + script("sheet-ui");

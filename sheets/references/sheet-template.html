@@ -561,6 +561,42 @@ var SheetEngine = (function () {
     return inp && inp.date && f !== "date" && f !== "month" ? "date" : f;
   }
 
+  // --- a chart's axes, laid out for the width it's drawn at: one unit is one CSS pixel, so its 12 px text is 12 px
+  // on a phone too. Round value steps (£0, £500, £1,000). Month names without the year when the title names their
+  // one year. Category labels never overlap: in a row while they fit (up to 20 characters); else months and dates
+  // thin to every 2nd, 3rd … one, and names are cut to 12 characters and angled, thinned only when even angled ones
+  // can't all fit. A key only when the title doesn't name the one series. measure(text): its width in px at 12 px.
+  function chartAxes(o) {
+    var FS = 12, PAD = 16, RIGHT = 12, data = o.data || {}, fmt = o.fmt || "int", W = o.width, measure = o.measure;
+    var max = o.max > 0 ? o.max : 1, raw = max / 5, mag = Math.pow(10, Math.floor(Math.log10(raw))), f = raw / mag;
+    var step = (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * mag;
+    if ((fmt === "int" || fmt === "money") && step < 1) step = 1;
+    var n = Math.max(1, Math.ceil(max / step - 1e-9)), ticks = [];
+    for (var i = 0; i <= n; i++) { var tv = Number((step * i).toPrecision(12)); ticks.push({ v: tv, text: fmtValue(tv, fmt, data) }); }
+    var labs = o.labels || [], title = String(o.title || "");
+    var months = labs.length > 0 && labs.every(function (l) { return l.fmt === "month" && typeof l.v === "number"; });
+    var year = months ? fromSerial(labs[0].v).y : 0;
+    var short = months && title.indexOf(String(year)) >= 0 && labs.every(function (l) { return fromSerial(l.v).y === year; });
+    var mon = short && new Intl.DateTimeFormat(data.locale || "en-GB", { month: "short", timeZone: "UTC" });
+    var full = labs.map(function (l) { return short ? mon.format(new Date(Date.UTC(year, fromSerial(l.v).m - 1, 1))) : String(l.text); });
+    var cut = function (n) { return full.map(function (s) { return s.length > n ? s.slice(0, n - 1) + "…" : s; }); }, text = cut(20);
+    var widest = function (a) { return a.reduce(function (m, s) { return Math.max(m, measure(s)); }, 0); };
+    var left = Math.min(Math.round(W * 0.4), Math.max(36, Math.ceil(widest(ticks.map(function (t) { return t.text; }))) + 14)), wl = widest(text), cnt = text.length || 1;
+    var gap = (W - left - RIGHT) / cnt, angle = 0, every = 1, bottom = FS + 18;
+    if (wl + 8 > gap) {
+      if (labs.every(function (l) { return typeof l.v === "number"; })) every = Math.ceil((wl + 8) / gap);
+      else {
+        text = cut(12); wl = widest(text); var drop = wl * Math.SQRT1_2; angle = 45;
+        left = Math.min(Math.round(W * 0.4), Math.max(left, Math.ceil(drop + 8 - gap / 2))); gap = (W - left - RIGHT) / cnt;
+        every = Math.ceil(FS * 1.3 / (gap * Math.SQRT1_2)); bottom = Math.ceil(drop + FS + 14);
+      }
+    }
+    var plot = Math.round(Math.min(224, Math.max(160, W * 0.5))), names = o.series || [];
+    return { ticks: ticks, top: ticks[n].v, labels: text, show: text.map(function (s, k) { return k % every === 0; }), angle: angle, every: every,
+      left: left, right: RIGHT, pad: PAD, gap: gap, plot: plot, height: PAD + plot + bottom,
+      key: !(names.length === 1 && title.toLowerCase().indexOf(String(names[0]).toLowerCase()) >= 0) };
+  }
+
   // --- .xlsx: a stored (uncompressed) zip of SpreadsheetML parts ---
   var CRC = (function () { var t = []; for (var n = 0; n < 256; n++) { var c = n; for (var k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
   function crc32(b) { var c = 0xFFFFFFFF; for (var i = 0; i < b.length; i++) c = CRC[(c ^ b[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
@@ -769,7 +805,7 @@ var SheetEngine = (function () {
     book.order.forEach(function (n) { rules[n.toLowerCase()] = ruleHits(book, book.tabs[n.toLowerCase()]); });
     return { values: values, rules: rules, delta: delta(data, overlay, book) };
   }
-  return { Book: Book, parse: parse, fmtValue: fmtValue, cellFmt: cellFmt, xlsx: xlsx, csv: csv, report: report, expand: expand, parseAddr: parseAddr, addr: addr, colName: colName, isErr: isErr, serial: serial, NAMES: NAMES, applyDelta: applyDelta, BATCH: BATCH, LIMIT: LIMIT, isCell: isCell, drawSize: drawSize, kept: kept, cleanEdits: cleanEdits, mergeEdits: mergeEdits, map: map, calc: calc, ruleHits: ruleHits, makeFile: makeFile };
+  return { Book: Book, parse: parse, fmtValue: fmtValue, cellFmt: cellFmt, chartAxes: chartAxes, xlsx: xlsx, csv: csv, report: report, expand: expand, parseAddr: parseAddr, addr: addr, colName: colName, isErr: isErr, serial: serial, NAMES: NAMES, applyDelta: applyDelta, BATCH: BATCH, LIMIT: LIMIT, isCell: isCell, drawSize: drawSize, kept: kept, cleanEdits: cleanEdits, mergeEdits: mergeEdits, map: map, calc: calc, ruleHits: ruleHits, makeFile: makeFile };
 })();
 if (typeof module !== "undefined") module.exports = SheetEngine;
 </script>
@@ -999,32 +1035,45 @@ self.onmessage = function (e) {
   // --- charts: bar and line, from computed cells ---
   var PAL = ["#1a5fd0", "#e07b00", "#0f7b55", "#7a4fd1", "#b23a6a", "#5f6b7a"];
   function seriesValues(tabName, range) { var out = []; E.expand(range).forEach(function (p) { var v = book.value(tabName, E.addr(p.r, p.c)); out.push(typeof v === "number" ? v : 0); }); return out; }
+  // Drawn at the width it's shown at (at most 860 px), so text keeps its size; drawn again when that width changes.
+  var chartW = 0, ruler = null;
+  function chartWidth() { var h = document.getElementById("charts"); return Math.min(860, Math.max(260, (h && h.clientWidth) || 760)); }
+  function measure(s) {
+    if (ruler === null) { var cv = document.createElement("canvas"); ruler = (cv.getContext && cv.getContext("2d")) || false; if (ruler) ruler.font = "12px " + getComputedStyle(document.body).fontFamily; }
+    return ruler ? ruler.measureText(s).width : s.length * 7;
+  }
   function renderCharts() {
     var host = document.getElementById("charts"); host.textContent = "";
-    var tab = tabObj();
+    var tab = tabObj(), W = chartW = chartWidth();
     (tab.charts || []).forEach(function (ch, idx) {
-      var labels = E.expand(ch.labels).map(function (p) { var v = book.value(tab.name, E.addr(p.r, p.c)), raw = book.raw[tab.name.toLowerCase()][E.addr(p.r, p.c)]; return shown(v, E.cellFmt(tab, E.addr(p.r, p.c), raw) || (typeof v === "number" && v > 30000 && v < 80000 ? "month" : null)); });
+      var labels = E.expand(ch.labels).map(function (p) { var a = E.addr(p.r, p.c), v = book.value(tab.name, a), raw = book.raw[tab.name.toLowerCase()][a], f = E.cellFmt(tab, a, raw) || (typeof v === "number" && v > 30000 && v < 80000 ? "month" : null); return { v: v, fmt: f, text: shown(v, f) }; });
       var series = (ch.series || []).map(function (s) { return { name: s.name, vals: seriesValues(tab.name, s.range) }; });
       var max = series.reduce(function (m, s) { return s.vals.reduce(function (n, v) { return v > n ? v : n; }, m); }, 0) || 1;
-      var W = 760, H = 300, L = 70, B = 60, T = 16, pw = W - L - 16, ph = H - T - B, n = labels.length || 1;
+      var ax = E.chartAxes({ labels: labels, max: max, fmt: ch.fmt || "int", title: ch.title, series: series.map(function (s) { return s.name; }), width: W, measure: measure, data: data });
+      var L = ax.left, T = ax.pad, ph = ax.plot, H = ax.height, top = ax.top, step = ax.gap, base = T + ph;
       var box = el("figure", { class: "chart", "data-ss-id": "chart-" + slug(tab.name) + "-" + idx }); box.style.margin = "0";
       box.appendChild(el("h3", null, ch.title || ""));
       var svgNS = "http://www.w3.org/2000/svg", svg = document.createElementNS(svgNS, "svg");
       svg.setAttribute("viewBox", "0 0 " + W + " " + H); svg.setAttribute("role", "img"); svg.setAttribute("aria-label", (ch.title || "Chart") + ": " + series.map(function (s) { return s.name; }).join(", "));
       function add(tag, at, text) { var nd = document.createElementNS(svgNS, tag); Object.keys(at).forEach(function (k) { nd.setAttribute(k, at[k]); }); if (text !== undefined) nd.textContent = text; svg.appendChild(nd); return nd; }
-      for (var k = 0; k <= 4; k++) { var y = T + ph - ph * k / 4; add("line", { x1: L, x2: W - 16, y1: y, y2: y, stroke: "#e5e7eb" }); add("text", { x: L - 8, y: y + 4, "text-anchor": "end", "font-size": 12, fill: "#52514a" }, E.fmtValue(max * k / 4, ch.fmt || "int", data)); }
-      var step = pw / n;
-      labels.forEach(function (lb, i) { add("text", { x: L + step * i + step / 2, y: H - B + 18, "text-anchor": "middle", "font-size": 12, fill: "#52514a" }, String(lb).slice(0, 12)); });
+      ax.ticks.forEach(function (t) { var y = base - ph * t.v / top; add("line", { x1: L, x2: W - ax.right, y1: y, y2: y, stroke: "#e5e7eb" }); add("text", { x: L - 8, y: y + 4, "text-anchor": "end", "font-size": 12, fill: "#52514a" }, t.text); });
+      ax.labels.forEach(function (lb, i) {
+        if (!ax.show[i]) return;
+        var x = L + step * i + step / 2;
+        if (ax.angle) add("text", { x: x + 4, y: base + 14, "text-anchor": "end", transform: "rotate(-" + ax.angle + " " + (x + 4) + " " + (base + 14) + ")", "font-size": 12, fill: "#52514a" }, lb);
+        else add("text", { x: x, y: base + 18, "text-anchor": "middle", "font-size": 12, fill: "#52514a" }, lb);
+      });
       series.forEach(function (s, si) {
         var col = PAL[si % PAL.length];
-        if (ch.type === "line") { var pts = s.vals.map(function (v, i) { return (L + step * i + step / 2) + "," + (T + ph - ph * v / max); }).join(" "); add("polyline", { points: pts, fill: "none", stroke: col, "stroke-width": 2.5 }); }
-        else { var bw = Math.max(2, (step * 0.8) / series.length); s.vals.forEach(function (v, i) { var h = ph * v / max; add("rect", { x: L + step * i + step * 0.1 + bw * si, y: T + ph - h, width: bw - 1, height: h, fill: col }); }); }
+        if (ch.type === "line") { var pts = s.vals.map(function (v, i) { return (L + step * i + step / 2) + "," + (base - ph * v / top); }).join(" "); add("polyline", { points: pts, fill: "none", stroke: col, "stroke-width": 2.5 }); }
+        else { var bw = Math.max(2, (step * 0.8) / series.length); s.vals.forEach(function (v, i) { var h = ph * v / top; add("rect", { x: L + step * i + step * 0.1 + bw * si, y: base - h, width: bw - 1, height: h, fill: col }); }); }
       });
       box.appendChild(svg);
-      var keys = el("div", { class: "keys" }); series.forEach(function (s, si) { var sp = el("span"); sp.appendChild(el("i", { style: "background:" + PAL[si % PAL.length] })); sp.appendChild(document.createTextNode(s.name)); keys.appendChild(sp); });
-      box.appendChild(keys); host.appendChild(box);
+      if (ax.key) { var keys = el("div", { class: "keys" }); series.forEach(function (s, si) { var sp = el("span"); sp.appendChild(el("i", { style: "background:" + PAL[si % PAL.length] })); sp.appendChild(document.createTextNode(s.name)); keys.appendChild(sp); }); box.appendChild(keys); }
+      host.appendChild(box);
     });
   }
+  addEventListener("resize", function () { if (book && chartWidth() !== chartW) renderCharts(); });
   // --- people's edits: one shared record each, newest edit to a cell wins ---
   function write(a, value) {
     if (!state.loaded || !state.signedIn) return;
