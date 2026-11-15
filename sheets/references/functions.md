@@ -58,9 +58,11 @@ the functions below. Any other name shows `#NAME?` in the space.
 
 - Nothing spills: a formula gives one value. Array maths work only inside SUMPRODUCT.
   Elsewhere, a range given to a one-value function uses its first cell.
-- Not supported: `TEXT`, `TEXTJOIN`, `FILTER`, `SORT`, `UNIQUE`, `OFFSET`, `INDIRECT`,
-  `NETWORKDAYS`, `PMT` and the other finance functions, and named ranges. Use a helper
-  column or a summary tab instead.
+- Not supported: `TEXT`, `TEXTJOIN`, `FILTER`, `SORT`, `UNIQUE`, `RANK`, `LARGE`, `SMALL`,
+  `ROW`, `OFFSET`, `INDIRECT`, `NETWORKDAYS`, `PMT` and the other finance functions, and
+  named ranges. Use helper columns on a Workings tab, or a summary tab, instead. A ranked
+  table has its own pattern in `references/build.md`, under "Working columns go on a tab
+  of their own".
 - `SUM(A1)` on a single text cell gives `#VALUE!`. Excel gives 0. Sum ranges, not lone
   text cells.
 - A formula that refers back to itself shows `#CYCLE!`.

@@ -133,6 +133,28 @@ glance. A summary full of zeros or a −94% margin reads as a broken sheet.
 - Never make a formula refer to itself, directly or through other cells. It shows
   `#CYCLE!`.
 
+### Working columns go on a tab of their own
+
+A tab people read shows each figure once, in the order they want it. The engine can't hide
+a column or a tab, so anything beside a table is read as part of it.
+
+- **Put working columns on a tab named "Workings", last in the list:** ranks, tie-breaks,
+  running counts, and the figures a lookup reads. Give each a header that says what it is,
+  such as "Position (points, then goal difference)". Add the tab to `data.json` when you
+  first need it.
+- **Lists people edit stay where they fill things in.** Teams, players or products go on
+  a tab of their own or an input tab, under a header that says so. Workings reads them
+  (`=Teams!A2`). Never keep them only on Workings, or beside a table people read.
+- **A ranked table** (a league, a top 5) has no SORT, RANK or LARGE to use. On Workings,
+  give one row to each name, with its figures and its position. Ties split on the next
+  figure, then by the list's order, so each position appears once. With points in B and
+  goal difference in C, for rows 2 to 7:
+  `=COUNTIFS(B$2:B$7,">"&B2)+COUNTIFS(B$2:B$7,B2,C$2:C$7,">"&C2)+COUNTIFS(B$2:B2,B2,C$2:C2,C2)`.
+  The ranges cover exactly the names' rows. On the tab people read, column A holds 1, 2, 3
+  and so on, and each row looks up its position:
+  `=INDEX(Workings!A$2:A$7,MATCH($A2,Workings!$D$2:$D$7,0))`. Never rank with a sort key
+  made by multiplying the figures together: nobody can read it.
+
 ## Change a sheet
 
 1. **Start on its space:** `sheet.js start <link>`, the link alone. A space that holds a
@@ -230,9 +252,11 @@ skill.
 3. **Drop-downs hold exactly the values the ask gave,** spelled the same. A highlight or
    COUNTIF that tests a value uses the same spelling.
 4. **The examples tell one believable story** (above), and the lede says they're examples.
-5. **For a change, only the asked-for cells moved,** and `saved_at`, `edited`, `before`
+5. **A tab people read shows each figure once.** Ranks, keys and other working columns
+   are on Workings, and the lists people edit are on a tab they fill in.
+6. **For a change, only the asked-for cells moved,** and `saved_at`, `edited`, `before`
    and `change_note` are filled in.
-6. **You wrote only `data.json` and `cells/`;** `sheet.js` built the page.
+7. **You wrote only `data.json` and `cells/`;** `sheet.js` built the page.
 
 ## Your reply
 
