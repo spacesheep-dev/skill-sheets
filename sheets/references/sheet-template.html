@@ -38,7 +38,10 @@ h1{font-size:clamp(22px,4vw,30px);line-height:1.2;margin:0 0 4px}
 .wrap{overflow:auto;max-height:70vh;border:1px solid var(--line);border-radius:8px;overscroll-behavior-x:contain}
 .gridbox::after{content:"";position:absolute;top:1px;right:1px;bottom:1px;width:32px;border-radius:0 8px 8px 0;background:linear-gradient(to right,transparent,var(--edge));pointer-events:none;opacity:0;transition:opacity .15s}
 .gridbox.more-right::after{opacity:1}
-.more{position:absolute;right:10px;top:7px;z-index:5;font:600 12px system-ui;color:var(--ink);background:var(--cell);border:1px solid var(--line);border-radius:999px;padding:3px 10px;pointer-events:none;display:none}
+/* "More columns" sits at the box's bottom-right, not on the letters' row, which never scrolls away: a sheet wider than
+   its box gets room under its last row, so scrolling down always clears what the chip covers. */
+.gridbox.wide .wrap{padding-bottom:38px}
+.more{position:absolute;right:10px;bottom:9px;z-index:5;font:600 12px system-ui;color:var(--ink);background:var(--cell);border:1px solid var(--line);border-radius:999px;padding:3px 10px;pointer-events:none;display:none}
 .gridbox.more-right .more{display:block}
 table.grid{border-collapse:separate;border-spacing:0;font-variant-numeric:tabular-nums}
 .grid th,.grid td{border-right:1px solid var(--line);border-bottom:1px solid var(--line);padding:0 8px;height:34px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:320px}
@@ -61,7 +64,10 @@ table.grid{border-collapse:separate;border-spacing:0;font-variant-numeric:tabula
 .grid td.warn{background:var(--warn);color:var(--warn-ink)}
 .grid td.good{background:var(--good);color:var(--good-ink)}
 .grid td.error{color:var(--bad-ink);font-weight:600}
-.grid td select{width:100%;min-height:30px;border:none;background:transparent;font:inherit}
+/* A drop-down draws its own arrow, and its text stops short of it ("Proposal sent" ran into the browser's own). */
+.grid td select{-webkit-appearance:none;appearance:none;width:100%;min-height:30px;border:none;padding:0 22px 0 0;font:inherit;text-overflow:ellipsis;cursor:pointer;
+background:linear-gradient(45deg,transparent 50%,var(--muted) 50%) calc(100% - 10px) 50%/5px 5px no-repeat,linear-gradient(135deg,var(--muted) 50%,transparent 50%) calc(100% - 5px) 50%/5px 5px no-repeat}
+.grid td select:disabled{cursor:default}
 .grid td input[type=checkbox]{width:20px;height:20px;margin:0;vertical-align:middle}
 .legend[hidden]{display:none}
 .legend{display:flex;flex-wrap:wrap;gap:14px;font-size:13px;color:var(--muted);margin:8px 0}
@@ -1031,7 +1037,7 @@ self.onmessage = function (e) {
     var sf = document.getElementById("show-f"); sf.setAttribute("aria-pressed", String(state.showF)); sf.textContent = state.showF ? "Show values" : "Show formulas";
   }
   // A shade and "More columns" at the right edge while columns are hidden past it.
-  function edges() { var w = document.getElementById("wrap"); document.getElementById("gridbox").classList.toggle("more-right", w.scrollLeft + w.clientWidth < w.scrollWidth - 2); }
+  function edges() { var w = document.getElementById("wrap"), g = document.getElementById("gridbox"); g.classList.toggle("wide", w.scrollWidth > w.clientWidth + 2); g.classList.toggle("more-right", w.scrollLeft + w.clientWidth < w.scrollWidth - 2); } // wide: stays put while scrolling across, so nothing jumps
   document.getElementById("wrap").addEventListener("scroll", edges, { passive: true });
   addEventListener("resize", edges);
   var deltaRows = null;
