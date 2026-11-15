@@ -27,7 +27,13 @@ h1{font-size:clamp(22px,4vw,30px);line-height:1.2;margin:0 0 4px}
 .status{font-size:13px;color:var(--muted)}
 .status.err,.status .warn{color:var(--bad-ink);font-weight:600}
 .status .warn{display:block}
-.tabs{display:flex;gap:4px;overflow-x:auto;border-bottom:1px solid var(--line);margin-top:6px}
+/* The tabs row holds the tabs and, at its right end, "More columns": above the grid, over nothing. When the tabs leave
+   no room for it, it takes a line of its own below them (.below, set by the page). */
+.tabrow{display:flex;align-items:center;gap:8px;margin-top:6px;border-bottom:1px solid var(--line)}
+.tabs{display:flex;gap:4px;overflow-x:auto;flex:1 1 auto;min-width:0}
+.tabrow.below{flex-wrap:wrap;border-bottom:none}
+.tabrow.below .tabs{flex-basis:100%;border-bottom:1px solid var(--line)}
+.tabrow.below .more{margin:0 0 0 auto}
 .tabs button{min-height:42px;padding:0 16px;border:1px solid transparent;border-bottom:none;border-radius:8px 8px 0 0;background:none;font:inherit;cursor:pointer;white-space:nowrap;color:var(--muted)}
 .tabs button[aria-selected=true]{background:var(--cell);border-color:var(--line);color:var(--ink);font-weight:600;margin-bottom:-1px}
 .fx{display:flex;gap:8px;align-items:center;margin:8px 0}
@@ -38,11 +44,10 @@ h1{font-size:clamp(22px,4vw,30px);line-height:1.2;margin:0 0 4px}
 .wrap{overflow:auto;max-height:70vh;border:1px solid var(--line);border-radius:8px;overscroll-behavior-x:contain}
 .gridbox::after{content:"";position:absolute;top:1px;right:1px;bottom:1px;width:32px;border-radius:0 8px 8px 0;background:linear-gradient(to right,transparent,var(--edge));pointer-events:none;opacity:0;transition:opacity .15s}
 .gridbox.more-right::after{opacity:1}
-/* "More columns" sits at the box's bottom-right, not on the letters' row, which never scrolls away: a sheet wider than
-   its box gets room under its last row, so scrolling down always clears what the chip covers. */
-.gridbox.wide .wrap{padding-bottom:38px}
-.more{position:absolute;right:10px;bottom:9px;z-index:5;font:600 12px system-ui;color:var(--ink);background:var(--cell);border:1px solid var(--line);border-radius:999px;padding:3px 10px;pointer-events:none;display:none}
-.gridbox.more-right .more{display:block}
+/* Shown while the sheet is wider than its box; hidden, keeping its room, once scrolled to the last column. */
+.more{flex:none;font:600 12px system-ui;color:var(--ink);background:var(--cell);border:1px solid var(--line);border-radius:999px;padding:3px 10px;white-space:nowrap;display:none;visibility:hidden}
+.tabrow.wide .more{display:block}
+.tabrow.more-right .more{visibility:visible}
 table.grid{border-collapse:separate;border-spacing:0;font-variant-numeric:tabular-nums}
 .grid th,.grid td{border-right:1px solid var(--line);border-bottom:1px solid var(--line);padding:0 8px;height:34px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:320px}
 .grid thead th{position:sticky;top:0;background:var(--head);z-index:2;font:600 12px system-ui;color:var(--muted);text-align:center}
@@ -123,9 +128,9 @@ background:linear-gradient(45deg,transparent 50%,var(--muted) 50%) calc(100% - 1
     <span class="status" id="status" role="status">Loading…</span>
   </div>
 </header>
-<nav class="tabs" id="tabs" role="tablist" aria-label="Tabs"></nav>
+<div class="tabrow" id="tabrow"><nav class="tabs" id="tabs" role="tablist" aria-label="Tabs"></nav><span class="more" aria-hidden="true">More columns →</span></div>
 <div class="fx"><span class="addr" id="addr">A1</span><input id="fx" aria-label="Selected cell" autocomplete="off" spellcheck="false"></div>
-<div class="gridbox" id="gridbox"><div class="wrap" id="wrap"><table class="grid" id="grid"></table></div><span class="more" aria-hidden="true">More columns →</span></div>
+<div class="gridbox" id="gridbox"><div class="wrap" id="wrap"><table class="grid" id="grid"></table></div></div>
 <div class="legend" id="legend"></div>
 <section class="delta" id="delta" data-ss-id="what-changed" hidden><h2>What changed in this version</h2><p id="delta-note"></p><table id="delta-table"></table></section>
 <section class="charts" id="charts" aria-label="Charts"></section>
@@ -1040,7 +1045,12 @@ self.onmessage = function (e) {
     var sf = document.getElementById("show-f"); sf.setAttribute("aria-pressed", String(state.showF)); sf.textContent = state.showF ? "Show values" : "Show formulas";
   }
   // A shade and "More columns" at the right edge while columns are hidden past it.
-  function edges() { var w = document.getElementById("wrap"), g = document.getElementById("gridbox"); g.classList.toggle("wide", w.scrollWidth > w.clientWidth + 2); g.classList.toggle("more-right", w.scrollLeft + w.clientWidth < w.scrollWidth - 2); } // wide: stays put while scrolling across, so nothing jumps
+  function edges() {
+    var w = document.getElementById("wrap"), row = document.getElementById("tabrow"), wide = w.scrollWidth > w.clientWidth + 2, right = w.scrollLeft + w.clientWidth < w.scrollWidth - 2;
+    document.getElementById("gridbox").classList.toggle("more-right", right); // the shade at the right edge
+    row.classList.toggle("wide", wide); row.classList.toggle("more-right", right); // "wide" doesn't change while scrolling across, so nothing moves
+    if (wide) { row.classList.remove("below"); var nav = document.getElementById("tabs"); row.classList.toggle("below", nav.scrollWidth > nav.clientWidth + 1); } // beside the chip, the tabs would scroll: the chip goes below
+  }
   document.getElementById("wrap").addEventListener("scroll", edges, { passive: true });
   addEventListener("resize", edges);
   var deltaRows = null;
