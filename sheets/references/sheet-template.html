@@ -46,10 +46,12 @@ h1{font-size:clamp(22px,4vw,30px);line-height:1.2;margin:0 0 4px}
 table.grid{border-collapse:separate;border-spacing:0;font-variant-numeric:tabular-nums}
 .grid th,.grid td{border-right:1px solid var(--line);border-bottom:1px solid var(--line);padding:0 8px;height:34px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:320px}
 .grid thead th{position:sticky;top:0;background:var(--head);z-index:2;font:600 12px system-ui;color:var(--muted);text-align:center}
-.grid th.rn{position:sticky;left:0;background:var(--head);z-index:1;font:600 12px system-ui;color:var(--muted);width:40px;min-width:40px;max-width:40px;text-align:center}
+/* Row numbers: 40 px up to row 999, then 8 px a digit more (the page sets --rn), so row 200 isn't "2…". */
+.grid{--rn:40px}
+.grid th.rn{position:sticky;left:0;background:var(--head);z-index:1;font:600 12px system-ui;font-variant-numeric:tabular-nums;color:var(--muted);width:var(--rn);min-width:var(--rn);max-width:var(--rn);padding:0 6px;text-align:center}
 .grid thead th.rn{z-index:3}
-.grid thead th:nth-child(2){position:sticky;left:40px;z-index:3}
-.grid tbody td:first-of-type{position:sticky;left:40px;z-index:1;border-right-color:var(--muted)}
+.grid thead th:nth-child(2){position:sticky;left:var(--rn);z-index:3}
+.grid tbody td:first-of-type{position:sticky;left:var(--rn);z-index:1;border-right-color:var(--muted)}
 .grid tr.frozen td:first-of-type{z-index:2}
 .grid tr.frozen th.rn{position:sticky;top:34px;left:0;z-index:3}
 .grid td{background:var(--cell);cursor:cell}
@@ -988,6 +990,7 @@ self.onmessage = function (e) {
     rebuild(); renderTabs();
     var tab = tabObj(); lookups = buildLookups(tab); var ds = E.drawSize(book, tab), rows = ds.rows, cols = ds.cols, k = E.kept(book, tab); state.cut = k.out ? k.rows : 0; state.out = k.out;
     var g = document.getElementById("grid"); g.textContent = ""; unshown = []; unchart = [];
+    g.style.setProperty("--rn", Math.max(40, 16 + 8 * String(rows).length) + "px"); // room for the last row's number
     var thead = el("thead"), hr = el("tr"); hr.appendChild(el("th", { class: "rn", scope: "col" }, ""));
     for (var c = 1; c <= cols; c++) { var th = el("th", { scope: "col" }, E.colName(c)); var w = (tab.cols || [])[c - 1]; if (w && w.w) th.style.minWidth = w.w + "px"; hr.appendChild(th); }
     thead.appendChild(hr); g.appendChild(thead);
