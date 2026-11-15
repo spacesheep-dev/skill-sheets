@@ -2,6 +2,12 @@
 
 Each release is a heading with its tag. The release workflow uses the words under it as the release's notes.
 
+## v2.0.3
+
+- A sheet's working columns go on a tab of their own, named Workings and listed last, so the tab people read shows each figure once. Before, a league table could show its teams twice, beside a "Sort key" of numbers like 7,506,010.998. A list people edit, like the teams, stays on a tab they fill in.
+- A ranked table (a league, a top 5) has a pattern to follow: a position for each name, worked out with COUNTIFS on Workings, with ties split on the next figure. The table then lists 1, 2, 3 and looks each row up. The engine has no SORT, RANK, LARGE or ROW, and `references/functions.md` now says so.
+- The folder's hash is `d88555811346`.
+
 ## v2.0.2
 
 - A sheet that's open while it's built ends showing the right status line and cell. Before, when the last push and the save sent the same page, the status line went back to "Loading…" and the cell's address to A1. The same happened after a push that changed only the description, and in a tab that had nothing to compare the page with, the grid, tabs and charts emptied. The page now draws again, where the person is, after every whole page.
