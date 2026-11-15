@@ -2,6 +2,18 @@
 
 Each release is a heading with its tag. The release workflow uses the words under it as the release's notes.
 
+## v2.0.1
+
+- On a phone the sheet starts on the first screen. The description folds to two lines with "more", and the two downloads sit under one Download button.
+- A chart is drawn at the width it's shown at, so its labels stay 12 px on a phone and don't touch at any width. Its value steps are round (£0, £500, £1,000), month labels drop a year the title names, and one series the title names has no key.
+- One value a column's format can't show, like 1000000000 typed into a date column, no longer stops the grid drawing or loses the edit. It shows as typed, marked, and the status line says why: "C3 isn't a date, so it shows what you typed."
+- Every cell and chart is drawn on its own, so one that fails can't stop the rest. The status line's warnings are red on a line of their own; the rest stays grey.
+- Leaving the formula bar sends only the edit the person made. Before, after Enter in a date column, the next tap saved the cell below as their edit, and could lose the tap.
+- A formula whose ranges add up past the limit shows `#CALC!` at once, instead of reading millions of cells first.
+- "More columns" sits in the tabs row, over nothing. A drop-down's text stops short of its arrow, and row numbers past 199 show whole.
+- Enter on a focused button presses it.
+- The folder's hash is `36168641a830`.
+
 ## v2.0.0
 
 - The sheet fills in while it's built. Within about 20 seconds the space shows the title, the named tabs and what the agent is doing. Each tab's rows then arrive in batches, outlined as they land, on every open tab. The last save says it's done, and the "working on this page" card goes away.
