@@ -216,6 +216,41 @@ module.exports = function ({ E, test, script, within, ROOT }) {
     const whole = Buffer.from(E.xlsx(new E.Book({ tabs: [{ name: "T", cells: { A1: "=A9999+1", A9999: 99 } }] }))).toString("utf8");
     assert.match(whole, /<f>A9999\+1<\/f>/); // a whole workbook keeps its live formulas
   });
+  // --- a value its format can't show ---
+  const plain = (o) => JSON.parse(JSON.stringify(o));
+  test("a number past the dates a Date holds, in a date or month cell, is shown as it is and marked, never thrown", () => {
+    const GB = { locale: "en-GB", currency: "GBP" };
+    assert.throws(() => E.fmtValue(1e9, "date", GB), /not a date/); // the formatter itself still refuses
+    for (const f of ["date", "month"]) for (const v of [1e9, -1e9, 1e300]) assert.deepStrictEqual(plain(E.show(v, f, GB)), { text: String(v), bad: true });
+    assert.deepStrictEqual(plain(E.show(E.serial(2026, 11, 15), "date", GB)), { text: "15 Nov 2026", bad: false });
+    assert.deepStrictEqual(plain(E.show(1e8, "month", GB)).bad, false); // the far end of what a Date holds still formats
+    assert.deepStrictEqual(plain(E.show(5, "money", { locale: "en-GB", currency: "not a code" })), { text: "5", bad: true }); // a currency Intl refuses, the same
+    const data = { tabs: [{ name: "T", freeze: 1, cols: [{ fmt: "month" }, { fmt: "date" }], cells: { A1: "Month", B1: "Due", A2: 1e9, B2: "=A2", A3: 46000 },
+      charts: [{ type: "bar", title: "By month", labels: "A2:A3", series: [{ name: "n", range: "A2:A3" }] }] }], before: { "T!A2": 46000 } };
+    const csv = E.makeFile("csv", data, {}, "T");
+    assert.ok(csv.ok, "no CSV");
+    assert.deepStrictEqual(csv.bytes.split("\r\n")[1], "1000000000,1000000000"); // the number, not NaN-aN-aN
+    assert.ok(E.makeFile("xlsx", data, {}, "T").ok); // the number with its date format: Excel shows it as ####
+    const ch = E.calc(data, {}).delta.filter((d) => d.cell === "T!B2")[0];
+    assert.deepStrictEqual([ch.was, ch.now], ["9 Dec 2025", "1000000000"]); // what changed in this version, shown
+    const labels = [1e9, 46000].map((v) => ({ v, fmt: "month", text: E.show(v, "month", GB).text }));
+    const ax = E.chartAxes({ labels, max: 10, fmt: "int", title: "By month, 2025", width: 358, measure: (s) => s.length * 7, data: GB });
+    assert.deepStrictEqual(ax.labels, ["1000000000", "Dec 2025"]); // a chart's labels don't throw either
+  });
+  test("a formatter that throws leaves every value shown: the page shows values only through E.show, and draws each cell and chart under a guard", () => {
+    const real = E.fmtValue;
+    E.fmtValue = () => { throw new Error("a formatter that throws"); };
+    try {
+      assert.deepStrictEqual([5, "text", null, true, { e: "#N/A" }].map((v) => plain(E.show(v, "int", {}))),
+        [{ text: "5", bad: true }, { text: "text", bad: true }, { text: "", bad: true }, { text: "true", bad: true }, { text: "#N/A", bad: true }]);
+    } finally { E.fmtValue = real; }
+    const ui = script("sheet-ui");
+    assert.doesNotMatch(ui, /E\.fmtValue\(/); // no way round show()
+    assert.match(ui, /try \{\s*raw = book\.raw\[tname\]\[a\]; v = book\.value\(tab\.name, a\)/); // each cell under its own guard...
+    assert.match(ui, /\} catch \(e\) \{ \/\/ anything else this cell can't draw[^\n]*\n[^\n]*unshown\.push\(a\)/); // ...shown as it is, and named in the status
+    assert.match(ui, /try \{ drawChart\(host, tab, ch, idx, W\); \} catch \(e\)/); // each chart too
+    assert.match(ui, /fetch\(API \+ "\/records\/" \+ COL \+ "\/mine"[\s\S]{0,600}?\n    render\(\); select\(a\);/); // an edit is sent before it's drawn
+  });
   test("files are made by makeFile, within the budget: out of budget is a refusal, never a partial file", () => {
     const ok = E.makeFile("csv", { tabs: [{ name: "T", cells: { A1: 2, A2: "=A1*21" } }] }, {}, "T");
     assert.deepStrictEqual([ok.ok, ok.bytes.split("\r\n")[1]], [true, "42"]);

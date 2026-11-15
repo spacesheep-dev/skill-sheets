@@ -193,6 +193,7 @@ var SheetEngine = (function () {
   var EPOCH = Date.UTC(1899, 11, 30);
   function serial(y, m, d) { return Math.round((Date.UTC(y, m - 1, d) - EPOCH) / 864e5); }
   function fromSerial(n) { var t = new Date(EPOCH + Math.floor(n) * 864e5); return { y: t.getUTCFullYear(), m: t.getUTCMonth() + 1, d: t.getUTCDate(), wd: t.getUTCDay() }; }
+  function dateOk(n) { return typeof n === "number" && isFinite(n) && !isNaN(new Date(EPOCH + Math.floor(n) * 864e5).getTime()); } // a JS Date holds about 273,000 years either side of 1970
   var ISO = /^(\d{4})-(\d{2})-(\d{2})$/;
   var DATEF = /^=\s*(DATE|EDATE|EOMONTH|TODAY|DATEVALUE|WORKDAY)\s*\(/i; // a formula that gives a date
 
@@ -561,6 +562,13 @@ var SheetEngine = (function () {
 
   // --- formats ---
   var SYM = map({ GBP: "£", USD: "$", EUR: "€" });
+  // What a cell shows: its value in its format or, when the format can't take it (1000000000 as a date, a currency
+  // code Intl doesn't know), the value as it is, marked bad. It never throws: the page shows every value through it,
+  // so no value in one cell can stop the grid, a chart or the status drawing. It calls the exported fmtValue.
+  function show(v, fmt, data) {
+    try { return { text: api.fmtValue(v, fmt, data), bad: false }; }
+    catch (e) { return { text: v === null || v === undefined ? "" : isErr(v) ? v.e : String(v), bad: true }; }
+  }
   function fmtValue(v, fmt, data) {
     if (isErr(v)) return v.e;
     if (v === null || v === undefined) return "";
@@ -574,8 +582,8 @@ var SheetEngine = (function () {
       case "num": return new Intl.NumberFormat(loc, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v);
       case "pct": return new Intl.NumberFormat(loc, { style: "percent", maximumFractionDigits: 0 }).format(v);
       case "pct1": return new Intl.NumberFormat(loc, { style: "percent", minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(v);
-      case "date": { var d = fromSerial(v); return new Intl.DateTimeFormat(loc, { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(Date.UTC(d.y, d.m - 1, d.d))); }
-      case "month": { var e = fromSerial(v); return new Intl.DateTimeFormat(loc, { month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(Date.UTC(e.y, e.m - 1, 1))); }
+      case "date": { if (!dateOk(v)) throw new RangeError("not a date"); var d = fromSerial(v); return new Intl.DateTimeFormat(loc, { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(Date.UTC(d.y, d.m - 1, d.d))); }
+      case "month": { if (!dateOk(v)) throw new RangeError("not a date"); var e = fromSerial(v); return new Intl.DateTimeFormat(loc, { month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(Date.UTC(e.y, e.m - 1, 1))); }
       default: return new Intl.NumberFormat(loc, { maximumFractionDigits: 10 }).format(Math.round(v * 1e10) / 1e10);
     }
   }
@@ -722,7 +730,7 @@ var SheetEngine = (function () {
       var row = [];
       for (var c = 1; c <= sz.cols; c++) {
         var a = addr(r, c), ex = book.exported(tabName, a), v = ex.v, f = cellFmt(tab, a, ex.raw, ex.inp);
-        var s = isErr(v) ? v.e : v === null ? "" : (typeof v === "number" && (f === "date" || f === "month")) ? (function (d) { return d.y + "-" + ("0" + d.m).slice(-2) + "-" + ("0" + d.d).slice(-2); })(fromSerial(v)) : str(v);
+        var s = isErr(v) ? v.e : v === null ? "" : (typeof v === "number" && (f === "date" || f === "month") && dateOk(v)) ? (function (d) { return d.y + "-" + ("0" + d.m).slice(-2) + "-" + ("0" + d.d).slice(-2); })(fromSerial(v)) : str(v);
         if (typeof v === "string" && RISKY.test(s)) s = "'" + s; // text an app could read as a formula; numbers stay numbers
         row.push(/[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s);
       }
@@ -805,7 +813,7 @@ var SheetEngine = (function () {
         var nv = book.value(t.name, a), ov = ob.value(t.name, a);
         if (JSON.stringify(nv) === JSON.stringify(ov)) return;
         var p = parseAddr(a), head = book.value(t.name, addr(1, p.c)), rowName = book.value(t.name, addr(p.r, 1)), fmt = cellFmt(t, a, raw[a], inp);
-        out.push({ cell: t.name + "!" + a, label: [rowName, head].filter(function (v) { return typeof v === "string" && v; }).join(" · "), was: fmtValue(ov, fmt, data), now: fmtValue(nv, fmt, data) });
+        out.push({ cell: t.name + "!" + a, label: [rowName, head].filter(function (v) { return typeof v === "string" && v; }).join(" · "), was: show(ov, fmt, data).text, now: show(nv, fmt, data).text });
       });
     });
     return out;
@@ -832,7 +840,8 @@ var SheetEngine = (function () {
     book.order.forEach(function (n) { rules[n.toLowerCase()] = ruleHits(book, book.tabs[n.toLowerCase()]); });
     return { values: values, rules: rules, delta: delta(data, overlay, book) };
   }
-  return { Book: Book, parse: parse, fmtValue: fmtValue, cellFmt: cellFmt, chartAxes: chartAxes, xlsx: xlsx, csv: csv, report: report, expand: expand, parseAddr: parseAddr, addr: addr, colName: colName, isErr: isErr, serial: serial, NAMES: NAMES, applyDelta: applyDelta, BATCH: BATCH, LIMIT: LIMIT, isCell: isCell, drawSize: drawSize, kept: kept, cleanEdits: cleanEdits, mergeEdits: mergeEdits, map: map, calc: calc, ruleHits: ruleHits, makeFile: makeFile };
+  var api = { Book: Book, parse: parse, fmtValue: fmtValue, show: show, cellFmt: cellFmt, chartAxes: chartAxes, xlsx: xlsx, csv: csv, report: report, expand: expand, parseAddr: parseAddr, addr: addr, colName: colName, isErr: isErr, serial: serial, NAMES: NAMES, applyDelta: applyDelta, BATCH: BATCH, LIMIT: LIMIT, isCell: isCell, drawSize: drawSize, kept: kept, cleanEdits: cleanEdits, mergeEdits: mergeEdits, map: map, calc: calc, ruleHits: ruleHits, makeFile: makeFile };
+  return api;
 })();
 if (typeof module !== "undefined") module.exports = SheetEngine;
 </script>
@@ -945,7 +954,9 @@ self.onmessage = function (e) {
     if (calc.ver !== state.ver) { calc.ver = state.ver; recalc(); }
     formulas(function (key) { book.memo[key] = key in calc.vals ? calc.vals[key] : PENDING; }); // the page itself works nothing out
   }
-  function shown(v, fmt) { return v === PENDING ? "…" : E.fmtValue(v, fmt, data); }
+  // A value's text, never an exception (E.show). A cell its format can't show is noted for the status line.
+  var unshown = [], unchart = []; // per render: such cells on this tab, and charts that couldn't be drawn
+  function shown(v, fmt, a) { if (v === PENDING) return "…"; var s = E.show(v, fmt, data); if (s.bad && a) unshown.push(a); return s.text; }
   function tabObj() { return data.tabs[state.tab]; }
   function el(tag, attrs, text) { var n = document.createElement(tag); if (attrs) Object.keys(attrs).forEach(function (k) { n.setAttribute(k, attrs[k]); }); if (text !== undefined) n.textContent = text; return n; }
   // A tab's name in the link, with every character the viewer's # check doesn't take (!'()*~ too) as %XX.
@@ -969,7 +980,7 @@ self.onmessage = function (e) {
   function render() {
     rebuild(); renderTabs();
     var tab = tabObj(); lookups = buildLookups(tab); var ds = E.drawSize(book, tab), rows = ds.rows, cols = ds.cols, k = E.kept(book, tab); state.cut = k.out ? k.rows : 0; state.out = k.out;
-    var g = document.getElementById("grid"); g.textContent = "";
+    var g = document.getElementById("grid"); g.textContent = ""; unshown = []; unchart = [];
     var thead = el("thead"), hr = el("tr"); hr.appendChild(el("th", { class: "rn", scope: "col" }, ""));
     for (var c = 1; c <= cols; c++) { var th = el("th", { scope: "col" }, E.colName(c)); var w = (tab.cols || [])[c - 1]; if (w && w.w) th.style.minWidth = w.w + "px"; hr.appendChild(th); }
     thead.appendChild(hr); g.appendChild(thead);
@@ -979,8 +990,10 @@ self.onmessage = function (e) {
       var tr = el("tr"); if (tab.freeze && r <= tab.freeze) tr.className = "frozen";
       tr.appendChild(el("th", { class: "rn", scope: "row" }, String(r)));
       for (var cc = 1; cc <= cols; cc++) {
-        var a = E.addr(r, cc), raw = book.raw[tname][a], v = book.value(tab.name, a), inp = book.input(tab.name, a);
-        var td = el("td", { "data-cell": a, "data-ss-id": "c-" + slug(tab.name) + "-" + a.toLowerCase() });
+        var a = E.addr(r, cc), raw, v, inp, td;
+        try {
+        raw = book.raw[tname][a]; v = book.value(tab.name, a); inp = book.input(tab.name, a);
+        td = el("td", { "data-cell": a, "data-ss-id": "c-" + slug(tab.name) + "-" + a.toLowerCase() });
         var fmt = E.cellFmt(tab, a, raw, inp), cls = [];
         if (typeof v === "number") cls.push("num");
         if (E.isErr(v)) cls.push("error");
@@ -1002,7 +1015,11 @@ self.onmessage = function (e) {
           sel.disabled = !state.loaded || !state.signedIn;
           (function (a) { sel.onchange = function (ev) { write(a, ev.target.value); }; })(a);
           td.appendChild(sel);
-        } else td.textContent = state.showF && inp && inp.formula !== undefined ? "=" + inp.formula : shown(v, fmt);
+        } else if (state.showF && inp && inp.formula !== undefined) td.textContent = "=" + inp.formula;
+        else { var had = unshown.length; td.textContent = shown(v, fmt, a); if (unshown.length > had) td.classList.add("error"); } // marked as well as named
+        } catch (e) { // anything else this cell can't draw: its value as it is, marked, and the grid goes on
+          td = el("td", { "data-cell": a, class: "error" }, v === undefined || v === null ? "" : E.isErr(v) ? v.e : String(v)); unshown.push(a);
+        }
         (function (a) { td.onclick = function (ev) { if (ev.target.tagName === "INPUT" || ev.target.tagName === "SELECT") return; select(a); }; td.ondblclick = function () { select(a); document.getElementById("fx").focus(); }; })(a);
         tr.appendChild(td);
       }
@@ -1056,8 +1073,11 @@ self.onmessage = function (e) {
     if (calc.here) who = "This page can't start a worker, so the sheet is worked out here, with a smaller limit. " + who;
     if (state.cut) who = "Only the first " + state.cut + " rows are drawn and downloaded; " + state.out + " more are left out. " + who;
     if (state.draft && state.draft.under) who = "The cell you're typing in changed: Enter keeps yours, Esc takes the new value. " + who;
+    var odd = unshown.length ? "⚠ " + (unshown.length > 1 ? unshown.length + " cells can't be shown in their format, so they show the value as it is: " + unshown.slice(0, 5).join(", ") + ". " : unshown[0] + " can't be shown in its format, so it shows the value as it is. ") : "";
+    if (unchart.length) odd += "⚠ " + unchart.map(function (t) { return "“" + t + "”"; }).join(", ") + " can't be drawn. ";
+    if (odd) who = odd + who;
     if (rep.errors.length) { st.textContent = "⚠ " + rep.errors.length + " cell" + (rep.errors.length > 1 ? "s show" : " shows") + " an error: " + rep.errors.slice(0, 5).join(", ") + ". " + who; st.className = "status err"; }
-    else { st.textContent = "No error cells. " + who; st.className = "status"; }
+    else { st.textContent = odd ? who : "No error cells. " + who; st.className = odd ? "status err" : "status"; }
   }
   // --- charts: bar and line, from computed cells ---
   var PAL = ["#1a5fd0", "#e07b00", "#0f7b55", "#7a4fd1", "#b23a6a", "#5f6b7a"];
@@ -1072,7 +1092,13 @@ self.onmessage = function (e) {
   function renderCharts() {
     var host = document.getElementById("charts"); host.textContent = "";
     var tab = tabObj(), W = chartW = chartWidth();
-    (tab.charts || []).forEach(function (ch, idx) {
+    (tab.charts || []).forEach(function (ch, idx) { try { drawChart(host, tab, ch, idx, W); } catch (e) { // the rest of the page goes on
+      var box = el("figure", { class: "chart", "data-ss-id": "chart-" + slug(tab.name) + "-" + idx }); box.style.margin = "0";
+      box.appendChild(el("h3", null, ch.title || "")); box.appendChild(el("p", { class: "status err" }, "This chart can't be drawn from its cells.")); host.appendChild(box); unchart.push(ch.title || "a chart");
+    } });
+  }
+  function drawChart(host, tab, ch, idx, W) {
+    {
       var labels = E.expand(ch.labels).map(function (p) { var a = E.addr(p.r, p.c), v = book.value(tab.name, a), raw = book.raw[tab.name.toLowerCase()][a], f = E.cellFmt(tab, a, raw) || (typeof v === "number" && v > 30000 && v < 80000 ? "month" : null); return { v: v, fmt: f, text: shown(v, f) }; });
       var series = (ch.series || []).map(function (s) { return { name: s.name, vals: seriesValues(tab.name, s.range) }; });
       var max = series.reduce(function (m, s) { return s.vals.reduce(function (n, v) { return v > n ? v : n; }, m); }, 0) || 1;
@@ -1098,19 +1124,20 @@ self.onmessage = function (e) {
       box.appendChild(svg);
       if (ax.key) { var keys = el("div", { class: "keys" }); series.forEach(function (s, si) { var sp = el("span"); sp.appendChild(el("i", { style: "background:" + PAL[si % PAL.length] })); sp.appendChild(document.createTextNode(s.name)); keys.appendChild(sp); }); box.appendChild(keys); }
       host.appendChild(box);
-    });
+    }
   }
-  addEventListener("resize", function () { if (book && chartWidth() !== chartW) renderCharts(); });
+  addEventListener("resize", function () { if (book && chartWidth() !== chartW) { unchart = []; renderCharts(); renderStatus(); } });
   // --- people's edits: one shared record each, newest edit to a cell wins ---
   function write(a, value) {
     if (!state.loaded || !state.signedIn) return;
     var tab = tabObj(), key = tab.name + "!" + a, v = value;
     if (typeof v === "string") { var s = v.trim(); if (s !== "" && s.charAt(0) !== "=" && !isNaN(Number(s.replace(/,/g, ""))) && !/^0\d/.test(s)) v = Number(s.replace(/,/g, "")); else if (/^(true|false)$/i.test(s)) v = /^true$/i.test(s); }
     state.mine[key] = { v: v, at: new Date().toISOString() }; state.ver++; state.draft = null;
-    render(); select(a);
+    // Sent before it's drawn: what they typed is kept even if something on the page can't show it.
     fetch(API + "/records/" + COL + "/mine", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ data: { edits: state.mine } }) })
       .then(function (r) { if (!r.ok) throw new Error(r.status === 413 ? "Your edits are over the 32 KB a person can keep. Ask the owner to fold them into the sheet." : "Couldn't save (" + r.status + ")."); })
       .catch(function (e) { var st = document.getElementById("status"); st.textContent = e.message; st.className = "status err"; });
+    render(); select(a);
   }
   var settled = false;
   addEventListener("spacesheep:session", function (e) { settled = true; if (e.detail && e.detail.signed_in) load(0); });
