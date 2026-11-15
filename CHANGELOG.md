@@ -2,6 +2,11 @@
 
 Each release is a heading with its tag. The release workflow uses the words under it as the release's notes.
 
+## v2.0.2
+
+- A sheet that's open while it's built ends showing the right status line and cell. Before, when the last push and the save sent the same page, the status line went back to "Loading…" and the cell's address to A1. The same happened after a push that changed only the description, and in a tab that had nothing to compare the page with, the grid, tabs and charts emptied. The page now draws again, where the person is, after every whole page.
+- The folder's hash is `4d046be9c48c`.
+
 ## v2.0.1
 
 - On a phone the sheet starts on the first screen. The description folds to two lines with "more", and the two downloads sit under one Download button.
