@@ -73,16 +73,43 @@ table.grid{border-collapse:separate;border-spacing:0;font-variant-numeric:tabula
 .keys i{display:inline-block;width:12px;height:12px;border-radius:2px;margin-right:4px;vertical-align:-1px}
 @media (max-width:600px){.grid th,.grid td{height:44px}.grid tr.frozen td,.grid tr.frozen th.rn{top:44px}.bar button,.tabs button,.fx input{min-height:44px}.wrap{max-height:62vh}
 .grid thead th:nth-child(2),.grid tbody td:first-of-type{min-width:0!important;max-width:42vw}}
+/* On a phone the grid starts on the first screen: the description folds to two lines, and "more" (or a tap on it)
+   opens the rest; the two downloads sit under one Download button. Wider screens show both in full, as before. */
+.lede-more,.dl-btn{display:none}
+.dl,.dl-menu{display:contents}
+@media (max-width:600px){.ledebox{position:relative;margin:0 0 10px}.ledebox .lede{margin:0}
+.ledebox:not(.open) .lede{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden}
+.ledebox.folds:not(.open) .lede{cursor:pointer}
+.lede-more{display:flex;align-items:flex-end;min-height:44px;padding:0;border:none;background:none;color:var(--accent);font:inherit;font-weight:600;cursor:pointer}
+.lede-more[hidden]{display:none}
+.ledebox:not(.open) .lede-more{position:absolute;right:0;bottom:0;padding-left:32px;background:linear-gradient(to right,transparent,var(--paper) 28px) bottom/100% 1.45em no-repeat}
+.ledebox.open .lede-more .m,.ledebox:not(.open) .lede-more .l{display:none}
+.dl{display:block;position:relative}
+.bar .dl-btn{display:inline-flex;align-items:center;gap:6px}
+.dl-btn::after{content:"";width:7px;height:7px;border:solid currentColor;border-width:0 2px 2px 0;transform:translateY(-2px) rotate(45deg)}
+.dl.open .dl-btn::after{transform:translateY(2px) rotate(-135deg)}
+.dl-menu{display:none;position:absolute;left:0;top:calc(100% + 4px);z-index:20;flex-direction:column;gap:2px;min-width:200px;padding:4px;background:var(--cell);border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 24px var(--edge)}
+.dl.open .dl-menu{display:flex}
+.bar .dl-menu button{border-color:transparent;text-align:left}
+.dl-word{display:none}}
 .chart svg text{fill:var(--muted)}.chart svg line{stroke:var(--rule)}
 </style>
 </head>
 <body>
 <header>
   <h1 data-ss-id="title">SHEET TITLE</h1>
-  <p class="lede" data-ss-id="lede">ONE OR TWO SENTENCES: what the sheet holds and who updates it.</p>
+  <div class="ledebox" id="ledebox">
+    <p class="lede" data-ss-id="lede">ONE OR TWO SENTENCES: what the sheet holds and who updates it.</p>
+    <button type="button" class="lede-more" id="lede-more" aria-expanded="false" hidden><span class="m">more</span><span class="l">less</span></button>
+  </div>
   <div class="bar">
-    <button type="button" id="dl-csv">Download CSV (this tab)</button>
-    <button type="button" id="dl-xlsx">Download .xlsx (all tabs)</button>
+    <div class="dl" id="dl">
+      <button type="button" class="dl-btn" id="dl-btn" aria-expanded="false" aria-controls="dl-menu">Download</button>
+      <div class="dl-menu" id="dl-menu">
+        <button type="button" id="dl-csv"><span class="dl-word">Download </span>CSV (this tab)</button>
+        <button type="button" id="dl-xlsx"><span class="dl-word">Download </span>.xlsx (all tabs)</button>
+      </div>
+    </div>
     <button type="button" id="show-f" aria-pressed="false">Show formulas</button>
     <span class="status" id="status" role="status">Loading…</span>
   </div>
@@ -982,7 +1009,7 @@ self.onmessage = function (e) {
       tb.appendChild(tr);
     }
     g.appendChild(tb);
-    renderBar(); renderLegend(); renderCharts(); renderStatus(); renderDelta(); edges(); settle();
+    renderBar(); renderLegend(); renderCharts(); renderStatus(); renderDelta(); edges(); fold(); settle();
     var sf = document.getElementById("show-f"); sf.setAttribute("aria-pressed", String(state.showF)); sf.textContent = state.showF ? "Show values" : "Show formulas";
   }
   // A shade and "More columns" at the right edge while columns are hidden past it.
@@ -1136,13 +1163,36 @@ self.onmessage = function (e) {
     if (document.activeElement === fx || /INPUT|SELECT|TEXTAREA/.test((document.activeElement || {}).tagName || "")) return;
     var mv = E.map({ ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] })[e.key];
     if (mv) { e.preventDefault(); move(mv[0], mv[1]); }
-    else if (e.key === "Enter" || e.key === "F2") { e.preventDefault(); fx.focus(); }
+    else if ((e.key === "Enter" && (document.activeElement || {}).tagName !== "BUTTON") || e.key === "F2") { e.preventDefault(); fx.focus(); } // Enter on a button presses it
   });
   document.getElementById("show-f").onclick = function () { state.showF = !state.showF; render(); };
   function download(name, type, bytes) { var url = URL.createObjectURL(new Blob([bytes], { type: type })), a = el("a", { href: url, download: name }); document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(url); }, 2000); }
   function base() { return slug(data.title || "sheet"); }
   document.getElementById("dl-csv").onclick = function () { var name = base() + "-" + slug(tabObj().name) + ".csv"; makeFile("csv", function (bytes) { download(name, "text/csv", bytes); }); };
   document.getElementById("dl-xlsx").onclick = function () { makeFile("xlsx", function (bytes) { download(base() + ".xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", bytes); }); };
+  // On a phone the two downloads open from one Download button. The open state is a class and an attribute the page
+  // never changes, so a save, which morphs the page in place, leaves it as the person set it.
+  var dl = document.getElementById("dl"), dlBtn = document.getElementById("dl-btn");
+  function dlOpen(on, back) { dl.classList.toggle("open", on); dlBtn.setAttribute("aria-expanded", String(on)); if (back) dlBtn.focus(); }
+  dlBtn.onclick = function (e) { var on = !dl.classList.contains("open"); dlOpen(on); if (on && e.detail === 0) document.getElementById("dl-csv").focus(); }; // from the keyboard: onto the first choice
+  document.getElementById("dl-menu").addEventListener("click", function (e) { if (e.target.closest("button")) dlOpen(false); });
+  document.addEventListener("click", function (e) { if (dl.classList.contains("open") && !dl.contains(e.target)) dlOpen(false); });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape" && dl.classList.contains("open")) dlOpen(false, dl.contains(document.activeElement)); });
+  // On a phone the description shows two lines; "more", or a tap on it, opens the rest. "more" shows only when
+  // there is more: checked after each draw, on resize, and when a push changes the description.
+  var ledeBox = document.getElementById("ledebox"), ledeMore = document.getElementById("lede-more");
+  function fold() {
+    if (!ledeBox) return; // a draw before this part of the script has run
+    var p = ledeBox.querySelector(".lede"), open = ledeBox.classList.contains("open");
+    var more = !!p && (open || p.scrollHeight > p.clientHeight + 1);
+    ledeMore.hidden = !more; ledeBox.classList.toggle("folds", more); ledeMore.setAttribute("aria-expanded", String(open));
+  }
+  function ledeOpen(on) { ledeBox.classList.toggle("open", on); fold(); }
+  ledeMore.onclick = function (e) { e.stopPropagation(); ledeOpen(!ledeBox.classList.contains("open")); };
+  ledeBox.addEventListener("click", function () { if (ledeBox.classList.contains("folds") && !ledeBox.classList.contains("open")) ledeOpen(true); });
+  addEventListener("resize", fold);
+  document.addEventListener("ss:live", fold);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(fold);
   // The person's place in this browser tab (tab, cell, scroll, typing), kept as it changes and put back at start, so
   // a whole-page rewrite or a reload doesn't lose it. Where storage is blocked, the page starts fresh as before.
   // The key is this sheet's address without a version's part (/v/<sha>/, where a save reloads the frame) and without
