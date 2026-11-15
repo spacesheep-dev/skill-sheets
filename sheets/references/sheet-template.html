@@ -25,7 +25,8 @@ h1{font-size:clamp(22px,4vw,30px);line-height:1.2;margin:0 0 4px}
 .bar button{min-height:40px;padding:0 14px;border:1px solid var(--line);border-radius:8px;background:var(--cell);color:var(--ink);font:inherit;cursor:pointer}
 .bar button:hover{border-color:var(--accent)}
 .status{font-size:13px;color:var(--muted)}
-.status.err{color:var(--bad-ink);font-weight:600}
+.status.err,.status .warn{color:var(--bad-ink);font-weight:600}
+.status .warn{display:block}
 .tabs{display:flex;gap:4px;overflow-x:auto;border-bottom:1px solid var(--line);margin-top:6px}
 .tabs button{min-height:42px;padding:0 16px;border:1px solid transparent;border-bottom:none;border-radius:8px 8px 0 0;background:none;font:inherit;cursor:pointer;white-space:nowrap;color:var(--muted)}
 .tabs button[aria-selected=true]{background:var(--cell);border-color:var(--line);color:var(--ink);font-weight:600;margin-bottom:-1px}
@@ -956,7 +957,7 @@ self.onmessage = function (e) {
   }
   // A value's text, never an exception (E.show). A cell its format can't show is noted for the status line.
   var unshown = [], unchart = []; // per render: such cells on this tab, and charts that couldn't be drawn
-  function shown(v, fmt, a) { if (v === PENDING) return "…"; var s = E.show(v, fmt, data); if (s.bad && a) unshown.push(a); return s.text; }
+  function shown(v, fmt, a) { if (v === PENDING) return "…"; var s = E.show(v, fmt, data); if (s.bad && a) unshown.push({ a: a, fmt: fmt }); return s.text; }
   function tabObj() { return data.tabs[state.tab]; }
   function el(tag, attrs, text) { var n = document.createElement(tag); if (attrs) Object.keys(attrs).forEach(function (k) { n.setAttribute(k, attrs[k]); }); if (text !== undefined) n.textContent = text; return n; }
   // A tab's name in the link, with every character the viewer's # check doesn't take (!'()*~ too) as %XX.
@@ -1016,9 +1017,9 @@ self.onmessage = function (e) {
           (function (a) { sel.onchange = function (ev) { write(a, ev.target.value); }; })(a);
           td.appendChild(sel);
         } else if (state.showF && inp && inp.formula !== undefined) td.textContent = "=" + inp.formula;
-        else { var had = unshown.length; td.textContent = shown(v, fmt, a); if (unshown.length > had) td.classList.add("error"); } // marked as well as named
+        else { var had = unshown.length; td.textContent = shown(v, fmt, a); if (unshown.length > had) { td.classList.add("error"); td.classList.remove("num"); } } // marked, named, and from the left, as typed
         } catch (e) { // anything else this cell can't draw: its value as it is, marked, and the grid goes on
-          td = el("td", { "data-cell": a, class: "error" }, v === undefined || v === null ? "" : E.isErr(v) ? v.e : String(v)); unshown.push(a);
+          td = el("td", { "data-cell": a, class: "error" }, v === undefined || v === null ? "" : E.isErr(v) ? v.e : String(v)); unshown.push({ a: a, fmt: null });
         }
         (function (a) { td.onclick = function (ev) { if (ev.target.tagName === "INPUT" || ev.target.tagName === "SELECT") return; select(a); }; td.ondblclick = function () { select(a); document.getElementById("fx").focus(); }; })(a);
         tr.appendChild(td);
@@ -1073,11 +1074,24 @@ self.onmessage = function (e) {
     if (calc.here) who = "This page can't start a worker, so the sheet is worked out here, with a smaller limit. " + who;
     if (state.cut) who = "Only the first " + state.cut + " rows are drawn and downloaded; " + state.out + " more are left out. " + who;
     if (state.draft && state.draft.under) who = "The cell you're typing in changed: Enter keeps yours, Esc takes the new value. " + who;
-    var odd = unshown.length ? "⚠ " + (unshown.length > 1 ? unshown.length + " cells can't be shown in their format, so they show the value as it is: " + unshown.slice(0, 5).join(", ") + ". " : unshown[0] + " can't be shown in its format, so it shows the value as it is. ") : "";
-    if (unchart.length) odd += "⚠ " + unchart.map(function (t) { return "“" + t + "”"; }).join(", ") + " can't be drawn. ";
-    if (odd) who = odd + who;
-    if (rep.errors.length) { st.textContent = "⚠ " + rep.errors.length + " cell" + (rep.errors.length > 1 ? "s show" : " shows") + " an error: " + rep.errors.slice(0, 5).join(", ") + ". " + who; st.className = "status err"; }
-    else { st.textContent = odd ? who : "No error cells. " + who; st.className = odd ? "status err" : "status"; }
+    var warn = [];
+    if (rep.errors.length) warn.push("⚠ " + rep.errors.length + " cell" + (rep.errors.length > 1 ? "s show" : " shows") + " an error: " + rep.errors.slice(0, 5).join(", ") + ".");
+    if (unshown.length) warn.push("⚠ " + unshownLine(unshown));
+    if (unchart.length) warn.push("⚠ " + unchart.map(function (t) { return "“" + t + "”"; }).join(", ") + " can't be drawn.");
+    st.textContent = ""; st.className = "status"; // red is for what's wrong, on its own line; the rest stays grey
+    if (warn.length) st.appendChild(el("span", { class: "warn" }, warn.join(" ")));
+    st.appendChild(document.createTextNode(warn.length ? who : "No error cells. " + who));
+  }
+  // Cells a format couldn't show, in the person's words: "C3 isn't a date, so it shows what you typed."
+  function unshownLine(list) {
+    var KIND = { date: ["a date", "dates"], month: ["a month", "months"] }, mine = state.mine, tn = tabObj().name;
+    var k = KIND[list[0].fmt], same = !!k && list.every(function (u) { return u.fmt === list[0].fmt; });
+    var yours = list.every(function (u) { return mine[tn + "!" + u.a]; }), one = list.length === 1;
+    var names = list.slice(0, 5).map(function (u) { return u.a; }), more = list.length - names.length;
+    var who2 = one ? names[0] : names.slice(0, -1).join(", ") + (more ? ", " + names[names.length - 1] + " and " + more + " more" : " and " + names[names.length - 1]);
+    var what = yours ? "what you typed" : one ? "its value as it is" : "their values as they are";
+    if (same) return who2 + (one ? " isn't " + k[0] + ", so it shows " : " aren't " + k[1] + ", so they show ") + what + ".";
+    return who2 + (one ? " can't be shown in its column's format, so it shows " : " can't be shown in their columns' formats, so they show ") + what + ".";
   }
   // --- charts: bar and line, from computed cells ---
   var PAL = ["#1a5fd0", "#e07b00", "#0f7b55", "#7a4fd1", "#b23a6a", "#5f6b7a"];

@@ -247,7 +247,7 @@ module.exports = function ({ E, test, script, within, ROOT }) {
     const ui = script("sheet-ui");
     assert.doesNotMatch(ui, /E\.fmtValue\(/); // no way round show()
     assert.match(ui, /try \{\s*raw = book\.raw\[tname\]\[a\]; v = book\.value\(tab\.name, a\)/); // each cell under its own guard...
-    assert.match(ui, /\} catch \(e\) \{ \/\/ anything else this cell can't draw[^\n]*\n[^\n]*unshown\.push\(a\)/); // ...shown as it is, and named in the status
+    assert.match(ui, /\} catch \(e\) \{ \/\/ anything else this cell can't draw[^\n]*\n[^\n]*unshown\.push\(\{ a: a/); // ...shown as it is, and named in the status
     assert.match(ui, /try \{ drawChart\(host, tab, ch, idx, W\); \} catch \(e\)/); // each chart too
     assert.match(ui, /fetch\(API \+ "\/records\/" \+ COL \+ "\/mine"[\s\S]{0,600}?\n    render\(\); select\(a\);/); // an edit is sent before it's drawn
   });
