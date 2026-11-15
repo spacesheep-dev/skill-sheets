@@ -89,6 +89,25 @@ module.exports = function ({ E, test, script, within, ROOT }) {
     assert.strictEqual(one("=SUMPRODUCT((A1:A20=0)*(A1:T1=0))"), 400); // a small one still works
     assert.ok(Date.now() - t0 < 4000, `took ${Date.now() - t0} ms`);
   });
+  test("a formula whose ranges add up past the budget ends in #CALC! before it reads a cell of them", () => {
+    const passes = Math.ceil(E.LIMIT.steps / 200000) + 1, big = "SUMPRODUCT(" + Array(passes).fill("A1:T10000").join(",") + ")";
+    const counted = (cells) => {
+      const book = new E.Book({ tabs: [{ name: "T", cells: Object.assign({ A1: 1 }, cells) }] }), value = book.value;
+      book.reads = []; book.value = function (t, a) { this.reads.push(a); return value.call(this, t, a); };
+      return book;
+    };
+    let b = counted({ Z1: "=" + big });
+    assert.strictEqual(errOf(within(3000, () => b.value("T", "Z1"))), "#CALC!");
+    assert.strictEqual(b.reads.length, 1, `read ${b.reads.length} cells`); // the cell itself, and none of its 3.2 million
+    b = counted({ Z1: "=SUM(A1:A3)+A1" });
+    assert.strictEqual(b.value("T", "Z1"), 2); // within the budget, it reads what it names
+    assert.deepStrictEqual(b.reads, ["Z1", "A1", "A2", "A3", "A1"]);
+    b = counted({ Z1: "=IF(A1=1, 5, " + big + ")", Z2: "=IFERROR(A1, " + big + ")", Z3: "=IFS(A1=1, 7, TRUE, " + big + ")" });
+    assert.deepStrictEqual(["Z1", "Z2", "Z3"].map((a) => b.value("T", a)), [5, 1, 7]); // a part that may never be worked out isn't counted
+    b = counted({});
+    assert.strictEqual(within(3000, () => b.ruleAt("=" + big + ">0", "T", 0, 0)), false); // a highlight's test, the same
+    assert.strictEqual(b.reads.length, 0, `read ${b.reads.length} cells`);
+  });
   test("text a formula makes is charged by its length, not only by its cells", () => {
     const t = (b1) => within(3000, () => new E.Book({ tabs: [{ name: "T", cells: { B1: b1, C1: "=SUMPRODUCT(LEN(UPPER(A1:A2000&B1)))" } }] }).value("T", "C1"));
     assert.strictEqual(t("x"), 2000);

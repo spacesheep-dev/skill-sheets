@@ -394,7 +394,7 @@ var SheetEngine = (function () {
     if (!inp) v = null;
     else if (inp.formula !== undefined) {
       this.busy[key] = true;
-      try { v = ++this.steps > LIMIT.steps ? ERR("#CALC!") : this.evaluate(parse(inp.formula), tabName, 0, 0); } catch (e) { v = ERR(typeof e === "string" ? e : "#ERROR!"); }
+      try { var tree = parse(inp.formula); v = ++this.steps + this.sureReads(tree, tabName, 0, 0) > LIMIT.steps ? ERR("#CALC!") : this.evaluate(tree, tabName, 0, 0); } catch (e) { v = ERR(typeof e === "string" ? e : "#ERROR!"); }
       if (isRange(v)) v = v.rows[0][0];
       if (v === undefined) v = ERR("#VALUE!"); // a function given too few arguments
       if (typeof v === "number" && !isFinite(v)) v = ERR("#NUM!");
@@ -403,9 +403,10 @@ var SheetEngine = (function () {
     } else v = inp.value;
     this.memo[key] = v; return v;
   };
-  Book.prototype.refRange = function (tok, here, dr, dc) {
+  // A reference's cells: a span, or null where refRange gives #REF! (no such tab, or a range off the sheet).
+  Book.prototype.refSpan = function (tok, here, dr, dc) {
     var tabName = tok.tab || here;
-    if (!this.raw[String(tabName).toLowerCase()]) return ERR("#REF!");
+    if (!this.raw[String(tabName).toLowerCase()]) return null;
     var parts = tok.v.split(":"), self = this;
     function cell(s, isEnd) {
       var colOnly = /^\$?([A-Z]{1,3})$/.exec(s);
@@ -413,10 +414,28 @@ var SheetEngine = (function () {
       var m = /^(\$?)([A-Z]{1,3})(\$?)(\d+)$/.exec(s); if (!m) return null;
       return { c: colNum(m[2]) + (m[1] ? 0 : dc), r: +m[4] + (m[3] ? 0 : dr) };
     }
-    var s = span(cell(parts[0], false), parts[1] ? cell(parts[1], true) : cell(parts[0], false));
+    return span(cell(parts[0], false), parts[1] ? cell(parts[1], true) : cell(parts[0], false));
+  };
+  Book.prototype.refRange = function (tok, here, dr, dc) {
+    var tabName = tok.tab || here, s = this.refSpan(tok, here, dr, dc), self = this;
     if (!s) return ERR("#REF!");
     var got = mk(s.r1 - s.r0 + 1, s.c1 - s.c0 + 1, function (r, c) { return self.value(tabName, addr(s.r0 + r, s.c0 + c)); });
-    return parts[1] ? got : got.rows[0][0];
+    return tok.v.indexOf(":") >= 0 ? got : got.rows[0][0];
+  };
+  // The cells a formula is sure to read: every range it names, except in the parts of IF, IFERROR, IFNA and IFS
+  // past their first, which may never be worked out. Each read is charged its cells (mk), so a formula whose sure
+  // reads are past the budget ends in #CALC! without reading a cell, where it once read millions first.
+  var LAZY = map({ IF: 1, IFERROR: 1, IFNA: 1, IFS: 1 });
+  Book.prototype.sureReads = function (n, here, dr, dc) {
+    var self = this, s, f, a;
+    switch (n.k) {
+      case "ref": s = this.refSpan(n, here, dr, dc); return s ? s.n : 0;
+      case "neg": case "pct": return this.sureReads(n.x, here, dr, dc);
+      case "bin": return this.sureReads(n.l, here, dr, dc) + this.sureReads(n.r, here, dr, dc);
+      case "call": f = n.f.replace(/^_XLFN\./, ""); a = LAZY[f] ? n.a.slice(0, 1) : F[f] ? n.a : [];
+        return a.reduce(function (t, x) { return t + self.sureReads(x, here, dr, dc); }, 0);
+    }
+    return 0;
   };
   var KEEP_RANGE = null;
   Book.prototype.evaluate = function (n, here, dr, dc) {
@@ -493,7 +512,7 @@ var SheetEngine = (function () {
   // A rule's formula is written for the top-left cell of its range; dr/dc move it to another cell.
   Book.prototype.ruleAt = function (formula, tabName, dr, dc) {
     if (++this.steps > LIMIT.steps) return false;
-    try { var v = this.evaluate(parse(String(formula).replace(/^=/, "")), tabName, dr, dc); if (isRange(v)) v = v.rows[0][0]; var b = bool(v); return isErr(b) ? false : b; } catch (e) { return false; }
+    try { var tree = parse(String(formula).replace(/^=/, "")); if (this.steps + this.sureReads(tree, tabName, dr, dc) > LIMIT.steps) return false; var v = this.evaluate(tree, tabName, dr, dc); if (isRange(v)) v = v.rows[0][0]; var b = bool(v); return isErr(b) ? false : b; } catch (e) { return false; }
   };
   function expand(range) { // "A2:C9" -> list of {r,c}
     var p = String(range).toUpperCase().replace(/\$/g, "").split(":"), s = span(parseAddr(p[0]), parseAddr(p[1] || p[0])), out = [];
